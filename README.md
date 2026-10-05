@@ -55,6 +55,7 @@ output/<曲名>/<曲名>_<楽器名>.m4a  ＋ manifest.json ＋ log.txt
 output/<曲名>/
 ├── <曲名>_original.m4a  原曲（変換・ゲイン調整後）
 ├── <曲名>_upper.m4a     ボーカル・ドラム・ベース抜き（耳コピの基準トラック）
+├── <曲名>_keyboards.m4a キーボード系まとめ（upper − guitar。piano/strings/synth/organ 等を全部含む）
 ├── <曲名>_piano.m4a     BS-Roformer-SW の piano
 ├── <曲名>_strings.m4a   Bowed Strings 専用モデル
 ├── <曲名>_synth.m4a     Mega53 synth
@@ -90,6 +91,9 @@ output/<曲名>/
   `work/upper_subtract.wav` と `work/upper_sum.wav` は常に両方作るので、聴き比べてから決めればよい。
   変更すると、upper を入力にしているステップだけが自動で再実行される。
 - `deliverables`：楽器名と、その元になる work ファイルの対応（並び順もここで決まる）
+  値をリストにすると足し合わせ、名前の前に `-` を付けると引き算（例 `keyboards: [upper, -guitar]`）。
+  Mega53 の keys は piano とほぼ同じ音なので、個別ステムを足すとピアノが二重になる。キーボード系は引き算で作っている
+- `song_overrides.<曲名>.merge`：その曲だけ、複数の楽器を1ファイルにまとめる（例 春日陰の `piano-strings: [piano, strings]`）
 - `filename_pattern`：出力ファイル名の形。既定は `{song}_{part}`（例 `天球のmujica_strings.m4a`）。
   `{nn}_{song}_{part}` にすると先頭に通し番号が付き、ファイル一覧で番号順に並ぶ
 - `explore.stems_per_pass`：explore を何ステムずつ処理するか（下の VRAM の項を参照）

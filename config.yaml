@@ -117,7 +117,8 @@ steps:
     outputs: {piano: alt_mega_piano}
     optional: true
 
-# output/<曲名>/ に並べる最終ファイル: {楽器名: work の名前}（この順番が manifest / ログの順）
+# output/<曲名>/ に並べる最終ファイル: {楽器名: work の名前 または そのリスト}（この順番が manifest / ログの順）
+# リストは足し合わせ、名前の前に - を付けると引き算
 # ファイル名は filename_pattern で決まる。{song}=曲名, {part}=楽器名, {nn}=上からの通し番号(00,01,...)
 #   例: "{song}_{part}" -> 天球のmujica_strings.m4a
 #       "{nn}_{song}_{part}" にすると番号順に並ぶ
@@ -125,15 +126,24 @@ filename_pattern: "{song}_{part}"
 deliverables:
   original: original
   upper: upper
+  # キーボード系 = 上物からギターを抜いたもの（piano / strings / synth / organ などを全部含む）。
+  # Mega53 の keys は piano とほぼ同じ音（相関0.98）なので、個別ステムを足すと二重になる。そのため引き算で作る
+  keyboards: [upper, -guitar]
   piano: piano
   strings: strings
   synth: synth
   keys: keys
   organ: organ
   digital-piano: digital_piano
-  chorus: backing
-  chorus-alt: back_vocal
+  chorus: back_vocal        # Mega53 back-vocal（karaoke 版は work/backing.wav に残る）
   lead: lead
+
+# 曲ごとの上書き（キーは output/ のフォルダ名＝曲名）
+#   merge: {新しい楽器名: [deliverables の楽器名, ...]}  -> それらを足して1ファイルにする
+song_overrides:
+  春日陰:
+    merge:
+      piano-strings: [piano, strings]
 
 # --explore: このモデルの全ステムを output/<曲名>/explore/ に保存
 explore:

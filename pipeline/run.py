@@ -335,23 +335,59 @@ def step_explore(songs, cfg, models, vram, force):
         sep.close()
 
 
+def song_deliverables(song, cfg):
+    """{part: [work names]} for this song, with song_overrides.<song>.merge applied.
+
+    A deliverable is one work name or a list of them; "-name" is subtracted.
+    A merge {new_part: [part_a, part_b]} replaces those parts with one file that
+    is their sum, placed where the first of them was."""
+    parts = {k: list(v) if isinstance(v, list) else [v] for k, v in cfg["deliverables"].items()}
+    over = (cfg.get("song_overrides") or {}).get(song.name) or {}
+    for new_part, members in (over.get("merge") or {}).items():
+        unknown = [m for m in members if m not in parts]
+        if unknown:
+            raise SystemExit(f"song_overrides.{song.name}.merge.{new_part}: unknown parts {unknown}")
+        merged, inserted = {}, False
+        for part, srcs in parts.items():
+            if part in members:
+                if not inserted:
+                    merged[new_part] = [s for m in members for s in parts[m]]
+                    inserted = True
+            else:
+                merged[part] = srcs
+        parts = merged
+    return parts
+
+
 def build_deliverables(song, cfg, models, steps):
     sr = cfg["sample_rate"]
     orig, _ = audio.read(song.wav("original"))
     frames = orig.shape[0]
+    parts = song_deliverables(song, cfg)
     tracks, exact = {}, set()
-    for out_name, src in cfg["deliverables"].items():
-        p = song.wav(src)
-        if not p.exists():
-            song.log(f"deliverable {out_name}: missing work/{src}.wav")
+    for out_name, srcs in parts.items():
+        missing = [s.lstrip("-") for s in srcs if not song.wav(s.lstrip("-")).exists()]
+        if missing:
+            song.log(f"deliverable {out_name}: missing work/{missing[0]}.wav")
             continue
-        a, file_sr = audio.read(p)
-        if file_sr != sr:
-            song.log(f"deliverable {out_name}: unexpected sample rate {file_sr}")
-            continue
-        if a.shape == (frames, 2):
-            exact.add(out_name)
-        tracks[out_name] = audio.fit_length(a, frames)
+        total, ok = None, True
+        for s in srcs:
+            sign, name = (-1.0, s[1:]) if s.startswith("-") else (1.0, s)
+            a, file_sr = audio.read(song.wav(name))
+            if file_sr != sr:
+                song.log(f"deliverable {out_name}: unexpected sample rate {file_sr} in {s}")
+                ok = False
+                break
+            if srcs == [name] and a.shape == (frames, 2):
+                exact.add(out_name)
+            a = sign * audio.fit_length(a, frames)
+            total = a if total is None else total + a
+        if ok:
+            tracks[out_name] = total
+    merged = {k: v for k, v in parts.items() if len(v) > 1 and k in tracks}
+    if merged:
+        expr = lambda v: " ".join(("- " + s[1:]) if s.startswith("-") else ("+ " + s) for s in v).lstrip("+ ")
+        song.log("deliverables: combined " + ", ".join(f"{k} = {expr(v)}" for k, v in merged.items()))
 
     # Drop tracks where the model found nothing (only faint bleed left).
     dropped = {}
@@ -386,7 +422,7 @@ def build_deliverables(song, cfg, models, steps):
         song.log(f"deliverables: max peak {peak:.4f} > {ceiling:.3f} -> global gain {20 * np.log10(gain):.2f} dB applied to all files")
 
     pattern = cfg.get("filename_pattern", "{song}_{part}")
-    order = list(cfg["deliverables"])
+    order = list(parts)
     names = {part: pattern.format(song=song.name, part=part, nn=f"{order.index(part):02d}") + ext for part in tracks}
 
     # remove outputs of earlier runs that this run does not produce (dropped part,
@@ -405,7 +441,7 @@ def build_deliverables(song, cfg, models, steps):
     files = {}
     for out_name, a in tracks.items():
         dst = song.dir / names[out_name]
-        src = song.wav(cfg["deliverables"][out_name])
+        srcs = [song.wav(s.lstrip("-")) for s in parts[out_name]]
         if gain != 1.0:
             a = a * gain
         if codec != "wav":
@@ -415,11 +451,11 @@ def build_deliverables(song, cfg, models, steps):
             # identical content: hardlink (no extra disk) — survives `--clean` of work/
             tmp = dst.with_name(dst.stem + ".tmp.wav")
             tmp.unlink(missing_ok=True)
-            os.link(src, tmp)
+            os.link(srcs[0], tmp)
             os.replace(tmp, dst)
         else:
             audio.write(dst, a, sr)
-        files[dst.name] = {"source": f"work/{src.name}", **audio.stats(a)}
+        files[dst.name] = {"source": " ".join(("-" if s.startswith("-") else "+") + f"work/{s.lstrip('-')}.wav" for s in parts[out_name]).lstrip("+"), **audio.stats(a)}
 
     used = {}
     for step in steps:
