@@ -1,0 +1,145 @@
+# stem-sep パイプライン設定
+# モデル名は `pymss list` に出る名前（またはエイリアス / `pymss register` した名前）。
+# ステム名はモデル config の training.instruments に書かれている名前（大文字小文字は区別しない）。
+
+model_dir: models            # ~/music_split_server からの相対パス
+download_source: huggingface # modelscope | huggingface | hf-mirror（未ダウンロード時に使用）
+device: cuda
+sample_rate: 44100
+
+# 「上物」トラックの作り方: subtract = instrumental - drums - bass
+#                          sum      = guitar + piano + other (BS-Roformer-SW)
+# 両方とも work/upper_subtract.wav, work/upper_sum.wav に常に書き出す。
+upper_method: subtract
+
+# 出力のどれかが上限（AAC は -1dBFS、それ以外は 1.0）を超えたら、全出力ファイルに同じゲインをかけて収める
+# （パート間の音量関係は保たれる。ステム毎の正規化はしない）。
+global_gain_on_clip: true
+
+# output/<曲名>/ の最終ファイルの保存形式（work/ と explore/ は常に float32 WAV）
+#   codec: aac  -> .m4a（AAC。bitrate で音質指定。元音源は 128k AAC なので 256k で十分）
+#          alac -> .m4a（Apple Lossless、24bit ロスレス。サイズは AAC の約5倍）
+#          wav  -> .wav（32bit float）
+output_format:
+  codec: aac
+  bitrate: 256k
+
+# 何も検出されなかった（にじみしか残っていない）パートは output/<曲名>/ に保存しない。
+# 判定: そのファイルで一番大きい1秒間の RMS が、原曲の同じ値より threshold_db 以上小さいとき。
+# 実測（天球のmujica）: 鳴っているパート -3〜-12 dB / 入っていない楽器 -41〜-59 dB。
+# work/ の中間ファイルは消さないので、閾値を変えて再実行すれば復活する。
+drop_silent:
+  enabled: true
+  threshold_db: -30
+  keep_always: [original, upper]
+
+# 処理ステップ（上から順に実行）。
+#   input:   original | upper | 他ステップの outputs で付けた名前
+#   outputs: {モデルのステム名: work/ に保存する名前}
+#   optional: true のステップは --optional 指定時のみ実行（比較用）
+#   inference_params: chunk_size / overlap_size / batch_size などの上書き
+steps:
+  - name: vocals
+    model: BS-Roformer-Resurrection.ckpt
+    input: original
+    outputs: {vocals: vocals, other: instrumental}
+
+  - name: karaoke
+    model: bs_roformer_karaoke_frazer_becruily.ckpt
+    input: vocals
+    outputs: {Vocals: lead, Instrumental: backing}
+
+  - name: six_stem
+    model: BS-Roformer-SW.ckpt
+    input: instrumental
+    outputs: {drums: drums, bass: bass, guitar: guitar, piano: piano, other: sw_other, vocals: sw_vocals}
+
+  - name: upper            # 組み込みステップ（モデル不要）
+
+  - name: strings
+    model: gilliaan_bowedstrings_bs_v1.ckpt
+    input: upper
+    outputs: {strings: strings}
+
+  - name: mega_synth
+    model: bs_mega_53stem_synth_mvsep.ckpt
+    input: upper
+    outputs: {synth: synth}
+
+  - name: mega_keys
+    model: bs_mega_53stem_keys_mvsep.ckpt
+    input: upper
+    outputs: {keys: keys}
+
+  - name: mega_organ
+    model: bs_mega_53stem_organ_mvsep.ckpt
+    input: upper
+    outputs: {organ: organ}
+
+  - name: mega_digital_piano
+    model: bs_mega_53stem_digital-piano_mvsep.ckpt
+    input: upper
+    outputs: {digital-piano: digital_piano}
+
+  - name: mega_back_vocal
+    model: bs_mega_53stem_back-vocal_mvsep.ckpt
+    input: vocals
+    outputs: {back-vocal: back_vocal}
+
+  # ---- 比較用（--optional） ----
+  - name: vocals_alt
+    model: becruily_deux.ckpt
+    input: original
+    outputs: {Vocals: alt_vocals, Instrumental: alt_instrumental}
+    optional: true
+
+  - name: karaoke_alt
+    model: mel_band_roformer_bve_gonza.ckpt
+    input: vocals
+    outputs: {Lead: alt_lead, Back: alt_backing}
+    optional: true
+
+  - name: strings_v2       # pymss register 済み（gilliaan/Stem-Separation-Models の v2）
+    model: gilliaan_bowedstrings_bs_v2
+    input: upper
+    outputs: {strings: alt_strings_v2}
+    optional: true
+
+  - name: mega_bowed_strings
+    model: bs_mega_53stem_bowed_strings_mvsep.ckpt
+    input: upper
+    outputs: {bowed_strings: alt_bowed_strings}
+    optional: true
+
+  - name: mega_piano
+    model: bs_mega_53stem_piano_mvsep.ckpt
+    input: upper
+    outputs: {piano: alt_mega_piano}
+    optional: true
+
+# output/<曲名>/ に並べる最終ファイル: {楽器名: work の名前}（この順番が manifest / ログの順）
+# ファイル名は filename_pattern で決まる。{song}=曲名, {part}=楽器名, {nn}=上からの通し番号(00,01,...)
+#   例: "{song}_{part}" -> 天球のmujica_strings.m4a
+#       "{nn}_{song}_{part}" にすると番号順に並ぶ
+filename_pattern: "{song}_{part}"
+deliverables:
+  original: original
+  upper: upper
+  piano: piano
+  strings: strings
+  synth: synth
+  keys: keys
+  organ: organ
+  digital-piano: digital_piano
+  chorus: backing
+  chorus-alt: back_vocal
+  lead: lead
+
+# --explore: このモデルの全ステムを output/<曲名>/explore/ に保存
+explore:
+  model: mvsep_mega_model_bs_roformer_53_stems_v1.ckpt
+  input: upper
+  inference_params: {}   # VRAM 不足なら {chunk_size: 441000} などに下げる
+  # 1パスで出すステム数。pymss は「ステム数 x 曲の長さ」のバッファを GPU に置くため、
+  # 全53ステムを一度に出すと 4分半の曲で VRAM 15.7GB に達する。小さいほど VRAM は減り、時間は増える。
+  stems_per_pass: 14

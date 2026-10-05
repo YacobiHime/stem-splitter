@@ -1,0 +1,23 @@
+# 音源・分離結果は著作物なのでコミットしない
+music/
+inbox/
+output/
+*.wav
+*.flac
+*.mp3
+*.m4a
+*.aac
+*.ogg
+*.opus
+
+# モデル重み（大きい・再配布しない）。MODELS.md / SHA256SUMS.txt は含める
+models/**
+!models/MODELS.md
+!models/SHA256SUMS.txt
+
+# 環境・外部リポジトリ・キャッシュ
+.venv/
+vendor/
+__pycache__/
+*.pyc
+*.tmp
