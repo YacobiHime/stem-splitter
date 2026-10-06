@@ -3,6 +3,24 @@
 Ave Mujica / Roselia / MyGO!!!!! などの曲から Piano / Strings / Synth / Keys / Organ / Digital Piano / Chorus を抜き出し、
 Audacity で並べて聴き比べるためのツール。**分離結果は個人の練習専用。アップロード・公開・Git へのコミットはしない。**
 
+## セットアップ
+
+必要なもの: Linux、NVIDIA GPU（VRAM 8GB 以上。動作確認は RTX 4060 Ti 16GB）、[uv](https://docs.astral.sh/uv/)、git、ffmpeg（`sudo apt install ffmpeg`）。
+
+```bash
+git clone https://github.com/YacobiHime/stem-splitter.git music_split_server
+cd music_split_server
+./setup.sh           # 基本: 分離・ミキサー・MIDI 化（Basic Pitch / Transkun）・拍とコードの解析
+./setup.sh --full    # 全部: ＋ 高精度の MIDI 化（YourMT3+ の重み 561MB、MuScriptor）
+```
+
+- `.venv`（Python 3.12、CUDA 12.8 版 torch）を作り、`requirements.txt`（`--full` なら `requirements-full.txt` も）を入れ、`vendor/` に外部リポジトリをクローンする。何度実行してもよい。
+  CUDA のバージョンが違うときは `TORCH_INDEX=https://download.pytorch.org/whl/cu126 ./setup.sh` のように変える。
+- 分離モデルの重み（通常処理で約1.8GB、ほかの分離の設定も使うと全部で約6.6GB）は、初回の分離のときに `models/` へ自動でダウンロードされる。
+- 基本だけでも全部の画面が使える。自動の MIDI 化は、YourMT3+ が無ければボーカルを、MuScriptor が無ければストリングスを Basic Pitch で作る。
+- MuScriptor の重みはライセンス（CC BY-NC 4.0）への同意が必要: https://huggingface.co/MuScriptor/muscriptor-medium で同意し、`uvx hf auth login` でログインしておくと、初回の MIDI 化のときにダウンロードされる。
+- 各モデルの出典・ライセンス・sha256 は [models/MODELS.md](models/MODELS.md)。
+
 ## 使い方
 
 ```bash
@@ -304,6 +322,7 @@ sudo が必要なので別途設定する。
 
 ```text
 ~/music_split_server/
+├── setup.sh           環境づくり（requirements.txt / requirements-full.txt）
 ├── separate.sh        入口
 ├── clip.sh            テストクリップを切り出す
 ├── mixer.sh           ブラウザ用ミキサーを起動

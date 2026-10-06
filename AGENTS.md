@@ -12,7 +12,8 @@
 
 ## 環境
 
-- Python 3.12、uv の仮想環境 `.venv/`（torch + CUDA 12.8、pymss）。コマンドは `.venv/bin/python` で実行する。パッケージ追加は `VIRTUAL_ENV=.venv uv pip install ...`。
+- 環境は `./setup.sh`（`--full` で YourMT3+ と MuScriptor も）で作る。Python 3.12、uv の仮想環境 `.venv/`（torch + CUDA 12.8、pymss）。コマンドは `.venv/bin/python` で実行する。
+- パッケージを足したら、バージョンを固定して `requirements.txt`（高精度の MIDI 化だけで使うものは `requirements-full.txt`）にも書く。`VIRTUAL_ENV=.venv uv pip install ...`。
 - 外部リポジトリは `vendor/`（BTC-ISMIR19 = コード認識、YourMT3 = MIDI 化）。git 管理外。
 - MuScriptor は `.venv/bin/muscriptor`（CLI）。無ければ `transcribe.muscriptor_available()` が False になり、自動モードは別のモデルに戻る。
 - ffmpeg が必要。

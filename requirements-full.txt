@@ -1,0 +1,9 @@
+# 高精度の MIDI 化（setup.sh --full が入れる）
+# YourMT3+（vendor/YourMT3 を別プロセスで動かす）。transformers は内部 API を使うので 4.45.1 に固定
+lightning==2.6.6
+transformers==4.45.1
+deprecated==3.0.0
+einops==0.8.2
+mido==1.3.3
+# MuScriptor（重みは HuggingFace でライセンスに同意してログインしたあと、初回に自動ダウンロード）
+muscriptor==0.3.0

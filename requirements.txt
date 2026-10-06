@@ -1,0 +1,20 @@
+# 基本（分離・ミキサー・Basic Pitch / Transkun の MIDI 化・拍とコードの解析）。setup.sh が入れる。
+# torch / torchaudio は CUDA 版を別に入れる（setup.sh）。basic-pitch は --no-deps で別に入れる
+# （依存指定の TensorFlow 2.15 以下に Python 3.12 用が無く、ONNX のモデルだけを使うため）。
+pymss==2.1.7
+librosa==1.0.0
+soundfile==0.14.0
+soxr==1.1.0
+pyyaml==6.0.3
+numpy==2.5.3
+# Basic Pitch（ONNX）が使うもの。resampy が pkg_resources を使うので setuptools は 70 未満
+onnxruntime-gpu==1.30.0
+pretty_midi==0.2.11.post0
+resampy==0.4.3
+mir_eval==0.8.2
+audioread==3.1.0
+setuptools<70
+# ピアノの MIDI 化（重みはパッケージ同梱）
+transkun==2.0.1
+# 拍・小節頭・拍子（重みは初回に ~/.cache/torch/hub/ へ自動ダウンロード）
+beat_this @ git+https://github.com/CPJKU/beat_this.git@b95c8ab0c58c2d9fcfd40508ae8dffbc05ac4f5c
