@@ -222,7 +222,7 @@ class Library:
                     entry.update(status="done", model=c["model"], notes=c["notes"])
                 elif not st:
                     # made with an older version (or the track was separated again): redo it with the same model
-                    self.queue_transcription(d.name, [rel], c.get("model", "basic"))
+                    self.queue_transcription(d.name, [rel], c.get("requested") or c.get("model", "basic"))
                     st = self.tr_status.get((d.name, rel))
             if st and (st["status"] in ("queued", "running") or (st["status"] == "error" and entry["status"] != "done")):
                 entry.update(status=st["status"], message=st.get("message", ""), progress=st.get("progress", 0.0))
@@ -258,11 +258,12 @@ class Library:
                 src = d / track
                 t = time.time()
                 st = self.tr_status[(song, track)]
+                requested = model
                 notes, raw, model = transcribe.transcribe(src, part, model, lambda f, st=st: st.__setitem__("progress", round(f, 3)))
                 f = self.notes_path(d, track)
                 f.parent.mkdir(exist_ok=True)
                 f.write_text(json.dumps({"version": transcribe.VERSION, "stamp": src.stat().st_mtime, "model": model,
-                                         "part": part, "raw_notes": raw, "notes": notes}))
+                                         "requested": requested, "part": part, "raw_notes": raw, "notes": notes}))
                 self.tr_status.pop((song, track), None)
                 print(f"[{song}] notes {track}: {len(notes)} notes (raw {raw}) in {time.time() - t:.1f}s [{model}]", flush=True)
             except Exception as e:  # noqa: BLE001 — report on the page, keep the worker alive

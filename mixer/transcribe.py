@@ -13,7 +13,12 @@ Models
           lead vocals look cleaner too. On separated bass and distorted guitar it misses most notes, and on dense
           section strings it drops some held notes — so for strings Basic Pitch's long notes that YourMT3 does
           not have are added back (ENSEMBLE_MIN_LEN).
-  auto    per part: AUTO_MT3 kinds -> mt3, everything else -> basic.
+  ms      MuScriptor medium (Kyutai / Mirelo 2026; code MIT, weights CC BY-NC 4.0 behind a HuggingFace login;
+          pip muscriptor, run as its CLI in a subprocess). Decoder-only transformer, multi-instrument; decoding is
+          limited to the instruments that can be in the part (MS_INSTRUMENTS). On the same violin movements
+          note F1 at 150 ms: 0.92 vs 0.87 for the YourMT3 strings pipeline; on section strings it keeps the
+          held voices that YourMT3 cuts up. About 1 min 45 s per song ("large": 10 min, more ghost notes).
+  auto    per part: AUTO_MS kinds -> ms, AUTO_MT3 kinds -> mt3, everything else -> basic.
 
 Raw output is cleaned per kind of instrument (PROFILES): playable range, minimum length,
 fragments of one held note joined, overtone ghosts (octave / twelfth above a louder note)
@@ -38,13 +43,26 @@ import soundfile as sf
 
 from pipeline import audio
 
-VERSION = 5
-MODELS = ("auto", "basic", "mt3", "piano")
-AUTO_MT3 = {"strings", "lead"}          # kinds where YourMT3 did better than Basic Pitch
+VERSION = 6
+MODELS = ("auto", "basic", "mt3", "ms", "piano")
+AUTO_MS = {"strings"}                   # kinds where MuScriptor did better than YourMT3
+AUTO_MT3 = {"lead"}                     # kinds where YourMT3 did better than Basic Pitch
+MS_MODEL = "medium"
+# instruments MuScriptor may decode, by part (then by kind); others are forbidden ('muscriptor list-instruments')
+MS_INSTRUMENTS = {
+    "strings": "violin,viola,cello,contrabass,string_ensemble,synth_strings",
+    "woodwind": "oboe,english_horn,bassoon,clarinet,flutes,soprano_and_alto_sax,tenor_sax,baritone_sax",
+    "brass": "trumpet,trombone,tuba,french_horn,brass_section",
+    "organ": "organ", "synth": "synth_lead,synth_pad,synth_strings",
+    "lead": "voice", "chorus": "voice", "bass": "acoustic_bass,electric_bass",
+    "guitar": "acoustic_guitar,clean_electric_guitar,distorted_electric_guitar",
+    "keys": "acoustic_piano,electric_piano,chromatic_percussion,organ",
+}
 ENSEMBLE_MIN_LEN = 0.4                  # strings: Basic Pitch notes at least this long that YourMT3 missed are kept
 SPECTRUM_MIN_DB = -22                   # YourMT3 notes this far below the strongest pitch at that moment are dropped
 SPECTRUM_JOIN_GAP = 0.12                # same-pitch notes this close are one note when the pitch does not dip
 SPECTRUM_DIP_DB = 6                     # ... by this much in between
+MS_SPECTRUM = dict(min_db=-25, join_gap=-1)   # MuScriptor: checked against the spectrum, not joined
 MT3_PROFILE = {"strings": dict(voices=5)}   # a string section: violins I / II, violas, cellos, basses
 SILENCE_DB = -45                        # notes where the track is this far below its loudest moment are noise
 # kind -> cleanup settings
@@ -162,7 +180,52 @@ def model_for(model, part):
     if model != "auto":
         return model
     from . import yourmt3
-    return "mt3" if kind_of(part) in AUTO_MT3 and yourmt3.available() else "basic"
+    kind = kind_of(part)
+    if kind in AUTO_MS and muscriptor_available():
+        return "ms"
+    return "mt3" if kind in AUTO_MT3 and yourmt3.available() else "basic"
+
+
+def muscriptor_bin():
+    return Path(sys.executable).with_name("muscriptor")
+
+
+def muscriptor_available():
+    return muscriptor_bin().exists()
+
+
+def muscriptor_notes(y, sr, part, progress=lambda f: None):
+    """Raw MuScriptor note events [(start, end, pitch, 1.0)] for mono audio, from its CLI (jsonl streamed to
+    stdout: progress follows the notes' start times)."""
+    instruments = MS_INSTRUMENTS.get(part.rsplit("-rest", 1)[0]) or MS_INSTRUMENTS.get(kind_of(part))
+    total = len(y) / sr
+    with tempfile.TemporaryDirectory(prefix="ms-") as tmp:
+        wav = os.path.join(tmp, "in.wav")
+        sf.write(wav, y, sr, subtype="FLOAT")
+        cmd = [os.fspath(muscriptor_bin()), "transcribe", wav, "--model", MS_MODEL, "-f", "jsonl", "-o", "-",
+               "--detect-tempo", "false"] + (["--instruments", instruments] if instruments else [])
+        err = open(os.path.join(tmp, "err.txt"), "w+")
+        proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=err, text=True)
+        starts, notes = {}, []
+        for line in proc.stdout:
+            try:
+                e = json.loads(line)
+            except ValueError:
+                continue
+            if e.get("type") == "start":
+                if e.get("instrument") == "drums":
+                    continue
+                starts[e["index"]] = e
+                progress(min(1.0, e["start_time"] / max(total, 1e-9)))
+            elif e.get("type") == "end" and e.get("start_event_index") in starts:
+                st = starts.pop(e["start_event_index"])
+                if e["end_time"] > st["start_time"]:
+                    notes.append((float(st["start_time"]), float(e["end_time"]), int(st["pitch"]), 1.0))
+        if proc.wait() != 0:
+            err.seek(0)
+            tail = [t for t in err.read().splitlines() if t.strip()][-3:]
+            raise RuntimeError("MuScriptor failed: " + " / ".join(tail)[-500:])
+        return notes
 
 
 def yourmt3_notes(path, progress=lambda f: None):
@@ -334,7 +397,13 @@ def transcribe(path, part, model="basic", progress=lambda f: None):
     progress(0.05)
     kind = kind_of(part)
     melodia = PROFILES[kind].get("melodia", True)
-    if model == "mt3":
+    if model == "ms":
+        raw = muscriptor_notes(y, 44100, part, lambda f: progress(0.05 + 0.85 * f))
+        # MuScriptor holds notes well: no joining here (it would merge real repeated notes), only the check
+        # against the spectrum and the voice limit
+        notes = clean(check_with_spectrum(raw, y, 44100, **MS_SPECTRUM), kind, min_len=0.03, join_gap=-1,
+                      min_amp=0, **MT3_PROFILE.get(kind, {}))
+    elif model == "mt3":
         both = kind == "strings"
         step = lambda f: progress(0.05 + (0.65 if both else 0.85) * f)
         raw = yourmt3_notes(path, step)
