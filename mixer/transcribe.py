@@ -4,9 +4,10 @@ Models
   basic   Spotify Basic Pitch (ICASSP 2022, Apache-2.0; ONNX, polyphonic, any instrument). Default.
           pip: basic-pitch is installed with --no-deps (its TensorFlow pin has no Python 3.12 wheels;
           the ONNX model needs onnxruntime only).
-  piano   ByteDance high-resolution piano transcription (Kong et al. 2021, Apache-2.0;
-          pip piano_transcription_inference). Optional for piano parts: on our separated piano
-          stems it was not better than Basic Pitch, but it gives exact onsets and velocities.
+  piano   Transkun V2 (Yan & Duan; MIT, pip transkun, weights included). Piano only. On MAESTRO test
+          excerpts (7 x 60 s, ~4500 notes) note onset F1 at 50 ms after cleanup: clean 0.96, and separated by
+          BS-Roformer-SW from a pop backing at the same level 0.95 — vs 0.85 for ByteDance's piano model (which
+          it replaces) and 0.71 for Basic Pitch. About 2 s per minute of audio.
   mt3     YourMT3+ (Chang et al. 2024; mixer/yourmt3.py, run as a subprocess). Multi-instrument transformer
           trained on strings / winds (URMP, MusicNet) and singing among others. On real solo violin recordings
           (Bach Violin Dataset, 5 movements) note F1 at 50 ms: 0.71 vs Basic Pitch 0.58 (frame F1 0.75 vs 0.64);
@@ -18,7 +19,7 @@ Models
           limited to the instruments that can be in the part (MS_INSTRUMENTS). On the same violin movements
           note F1 at 150 ms: 0.92 vs 0.87 for the YourMT3 strings pipeline; on section strings it keeps the
           held voices that YourMT3 cuts up. About 1 min 45 s per song ("large": 10 min, more ghost notes).
-  auto    per part: AUTO_MS kinds -> ms, AUTO_MT3 kinds -> mt3, everything else -> basic.
+  auto    per part: AUTO_PIANO parts -> piano, AUTO_MS kinds -> ms, AUTO_MT3 kinds -> mt3, everything else -> basic.
 
 Raw output is cleaned per kind of instrument (PROFILES): playable range, minimum length,
 fragments of one held note joined, overtone ghosts (octave / twelfth above a louder note)
@@ -26,8 +27,6 @@ removed, and for the lead vocal one note at a time with vibrato wobble merged.
 Notes are [start s, end s, midi pitch, velocity 1-127] in the time of the original song.
 """
 
-import contextlib
-import io
 import json
 import math
 import os
@@ -43,8 +42,9 @@ import soundfile as sf
 
 from pipeline import audio
 
-VERSION = 6
+VERSION = 7
 MODELS = ("auto", "basic", "mt3", "ms", "piano")
+AUTO_PIANO = {"piano", "digital-piano"}   # parts where Transkun did better than Basic Pitch
 AUTO_MS = {"strings"}                   # kinds where MuScriptor did better than YourMT3
 AUTO_MT3 = {"lead"}                     # kinds where YourMT3 did better than Basic Pitch
 MS_MODEL = "medium"
@@ -63,6 +63,7 @@ SPECTRUM_MIN_DB = -22                   # YourMT3 notes this far below the stron
 SPECTRUM_JOIN_GAP = 0.12                # same-pitch notes this close are one note when the pitch does not dip
 SPECTRUM_DIP_DB = 6                     # ... by this much in between
 MS_SPECTRUM = dict(min_db=-25, join_gap=-1)   # MuScriptor: checked against the spectrum, not joined
+PIANO_PROFILE = dict(min_len=0.03, min_amp=0)   # Transkun: fast key presses are short; its quiet notes are real
 MT3_PROFILE = {"strings": dict(voices=5)}   # a string section: violins I / II, violas, cellos, basses
 SILENCE_DB = -45                        # notes where the track is this far below its loudest moment are noise
 # kind -> cleanup settings
@@ -145,34 +146,28 @@ def basic_pitch_notes(y, sr, melodia=True, progress=lambda f: None):
     return [(float(s), float(e), int(p), float(a)) for s, e, p, a, _ in events]
 
 
-class _SegmentProgress(io.StringIO):
-    """The piano model prints "Segment i / N" while it runs; turn that into progress."""
-
-    def __init__(self, progress):
-        super().__init__()
-        self.progress = progress
-
-    def write(self, s):
-        m = re.search(r"Segment (\d+) / (\d+)", s)
-        if m:
-            self.progress(int(m.group(1)) / max(1, int(m.group(2))))
-        return len(s)
-
-
 def piano_notes(y, sr, progress=lambda f: None):
-    """Raw ByteDance piano model note events [(start, end, pitch, velocity/127)]."""
+    """Raw Transkun V2 note events [(start, end, pitch, velocity/127)] (pedal events dropped)."""
     global _piano_model
-    import librosa
+    import moduleconf
+    import soxr
     import torch
-    from piano_transcription_inference import PianoTranscription, sample_rate
+    from importlib.resources import files
 
+    device = "cuda" if torch.cuda.is_available() else "cpu"
     if _piano_model is None:
-        _piano_model = PianoTranscription(device="cuda" if torch.cuda.is_available() else "cpu", checkpoint_path=None)
-    y16 = librosa.resample(y, orig_sr=sr, target_sr=sample_rate)
-    with tempfile.TemporaryDirectory(prefix="pt-") as tmp, contextlib.redirect_stdout(_SegmentProgress(progress)):
-        out = _piano_model.transcribe(y16, os.path.join(tmp, "out.mid"))
-    return [(float(e["onset_time"]), float(e["offset_time"]), int(e["midi_note"]), e["velocity"] / 127)
-            for e in out["est_note_events"]]
+        pre = files("transkun") / "pretrained"
+        conf = moduleconf.parseFromFile(os.fspath(pre / "2.0.conf"))
+        model = conf["Model"].module.TransKun(conf=conf["Model"].config)
+        ckpt = torch.load(os.fspath(pre / "2.0.pt"), map_location="cpu")
+        model.load_state_dict(ckpt.get("best_state_dict", ckpt.get("state_dict")), strict=False)
+        _piano_model = model.eval().to(device)
+    x = soxr.resample(y.astype(np.float32), sr, _piano_model.fs)
+    x = torch.from_numpy(np.stack([x, x], 1)).to(device)   # the model takes (samples, 2)
+    with torch.no_grad():
+        notes = _piano_model.transcribe(x, discardSecondHalf=False)
+    progress(1.0)
+    return [(float(n.start), float(n.end), int(n.pitch), n.velocity / 127) for n in notes if n.pitch > 0]
 
 
 def model_for(model, part):
@@ -180,6 +175,8 @@ def model_for(model, part):
     if model != "auto":
         return model
     from . import yourmt3
+    if part in AUTO_PIANO:
+        return "piano"
     kind = kind_of(part)
     if kind in AUTO_MS and muscriptor_available():
         return "ms"
@@ -388,7 +385,7 @@ def clean(events, kind, **override):
 
 
 def transcribe(path, part, model="basic", progress=lambda f: None):
-    """Notes for one track file. model: "basic", "piano" or "mt3" ("auto": see model_for).
+    """Notes for one track file. model: one of MODELS ("auto": see model_for).
     progress(f): 0..1 over the whole job (decoding 0-5%, the model(s) 5-90%, cleaning 90-100%).
     Returns (notes, number of raw events, model used)."""
     model = model_for(model, part)
@@ -418,8 +415,12 @@ def transcribe(path, part, model="basic", progress=lambda f: None):
                       **MT3_PROFILE.get(kind, {}))
     else:
         step = lambda f: progress(0.05 + 0.85 * f)
-        raw = piano_notes(y, 44100, step) if model == "piano" else basic_pitch_notes(y, 44100, melodia, step)
-        notes = clean(raw, kind)
+        if model == "piano":
+            raw = piano_notes(y, 44100, step)
+            notes = clean(raw, kind, **PIANO_PROFILE)
+        else:
+            raw = basic_pitch_notes(y, 44100, melodia, step)
+            notes = clean(raw, kind)
     progress(0.95)
     notes = silence_gate(notes, y, 44100)
     progress(1.0)

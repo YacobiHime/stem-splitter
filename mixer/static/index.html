@@ -1754,7 +1754,7 @@ const KIND = { piano: "keys", "digital-piano": "keys", keys: "keys", keyboards: 
   organ: "pad", synth: "pad", strings: "strings", brass: "pad", woodwind: "lead", bass: "bass", guitar: "guitar",
   "acoustic-guitar": "guitar", "electric-guitar": "guitar", lead: "lead", vocals: "lead", chorus: "chorus" };
 const GM_PROGRAM = { keys: 0, pad: 89, strings: 48, bass: 33, guitar: 27, lead: 53, chorus: 52, other: 0 };
-const NOTE_MODELS = { basic: "Basic Pitch", mt3: "YourMT3", ms: "MuScriptor", piano: "ピアノ専用モデル" };
+const NOTE_MODELS = { basic: "Basic Pitch", mt3: "YourMT3", ms: "MuScriptor", piano: "Transkun" };
 let notesData = {}, notesPrepared = {}, notesTimer = 0;
 const nPrefs = Object.assign({ win: 3, quant: 0, hidden: {}, len: "next" }, store.get("notesPrefs", {}));
 const saveNPrefs = () => store.set("notesPrefs", nPrefs);
@@ -1820,8 +1820,8 @@ function makePop() {
     <div style="max-height:46vh;overflow:auto">${pitched.map(([id, e]) => `<label class="row" style="margin:6px 0"><input type="checkbox" value="${esc(id)}" ${def(e) ? "checked" : ""}>
       <span style="flex:1">${esc(trackLabel(id))} <span style="color:var(--muted);font-size:12px">${e.group === "mix" ? "" : "（重ねる用）"}</span></span>
       <span class="sub" style="margin:0">${{ done: "作成済み", queued: "待ち", running: "作成中", error: "失敗" }[e.status] || ""}</span></label>`).join("")}</div>
-    <div class="row" style="align-items:flex-start"><label style="padding-top:10px">モデル</label><div class="btns"><button class="btn on" data-m="auto">自動</button><button class="btn" data-m="basic">標準（Basic Pitch）</button><button class="btn" data-m="mt3">高精度（YourMT3）</button><button class="btn" data-m="ms">高精度・遅い（MuScriptor）</button><button class="btn" data-m="piano">ピアノ専用</button></div></div>
-    <p class="sub">自動はストリングスを MuScriptor、ボーカル・木管を YourMT3、ほかを標準で作る。YourMT3 はボーカルで標準より正確だが、ベースや歪んだギターは取りこぼしが多い（1パート10〜30秒）。MuScriptor はストリングスでいちばん正確で、パートの楽器だけを聞き取る（1パート2分ほど）。ピアノ専用はピアノのパート向け（打鍵の強さまで取れるが、分離した音では標準より良いとは限らない）。作成済みのパートを選ぶと作り直す。</p>
+    <div class="row" style="align-items:flex-start"><label style="padding-top:10px">モデル</label><div class="btns"><button class="btn on" data-m="auto">自動</button><button class="btn" data-m="basic">標準（Basic Pitch）</button><button class="btn" data-m="mt3">高精度（YourMT3）</button><button class="btn" data-m="ms">高精度・遅い（MuScriptor）</button><button class="btn" data-m="piano">ピアノ専用（Transkun）</button></div></div>
+    <p class="sub">自動はピアノを Transkun、ストリングスを MuScriptor、ボーカル・木管を YourMT3、ほかを標準で作る。YourMT3 はボーカルで標準より正確だが、ベースや歪んだギターは取りこぼしが多い（1パート10〜30秒）。MuScriptor はストリングスでいちばん正確で、パートの楽器だけを聞き取る（1パート2分ほど）。ピアノ専用（Transkun）はピアノのパート向けで、分離したピアノでも標準よりずっと正確（打鍵の強さも取れる。1パート数秒）。作成済みのパートを選ぶと作り直す。</p>
     <div class="btns" style="margin-top:8px"><button class="btn pri" id="nGo">作成</button></div>`, (pop) => {
     let model = "auto";
     pop.querySelectorAll("[data-m]").forEach((b) => { b.onclick = () => { model = b.dataset.m; pop.querySelectorAll("[data-m]").forEach((x) => x.classList.toggle("on", x === b)); }; });
