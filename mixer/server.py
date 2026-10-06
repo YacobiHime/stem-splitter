@@ -154,7 +154,7 @@ class Library:
     def describe(self, d, m):
         def entry(rel, info, group):
             f = d / rel
-            return {"id": rel, "part": info.get("part") or rel, "group": group,
+            return {"id": rel, "part": info.get("part") or rel, "group": group, "parent": info.get("parent"),
                     "v": int(f.stat().st_mtime), "peak_dbfs": info.get("peak_dbfs")}
 
         mix = [entry(rel, info, "mix") for rel, info in m["mix_files"].items() if (d / rel).exists()]
@@ -208,7 +208,7 @@ class Library:
         mix_parts = {i.get("part") for i in m["mix_files"].values()}
         for rel, info in {**m["mix_files"], **m.get("files", {})}.items():
             group = "mix" if rel in m["mix_files"] else "extra"
-            if info.get("part") not in transcribe.PITCHED or not (d / rel).exists():
+            if not transcribe.is_pitched(info.get("part", "")) or not (d / rel).exists():
                 continue
             if group == "extra" and info.get("part") in mix_parts:      # same as the mixer: no duplicates
                 continue
@@ -219,8 +219,12 @@ class Library:
                 c = json.loads(f.read_text())
                 if c.get("stamp") == (d / rel).stat().st_mtime and c.get("version") == transcribe.VERSION:
                     entry.update(status="done", model=c["model"], notes=c["notes"])
+                elif not st:
+                    # made with an older version (or the track was separated again): redo it with the same model
+                    self.queue_transcription(d.name, [rel], c.get("model", "basic"))
+                    st = self.tr_status.get((d.name, rel))
             if st and (st["status"] in ("queued", "running") or (st["status"] == "error" and entry["status"] != "done")):
-                entry.update(status=st["status"], message=st.get("message", ""))
+                entry.update(status=st["status"], message=st.get("message", ""), progress=st.get("progress", 0.0))
             out[rel] = entry
         return out
 
@@ -246,13 +250,14 @@ class Library:
                 while not self.tr_queue:
                     self.tr_cond.wait()
                 song, track, model = self.tr_queue.pop(0)
-                self.tr_status[(song, track)] = {"status": "running", "model": model}
+                self.tr_status[(song, track)] = {"status": "running", "model": model, "progress": 0.0}
             try:
                 d, m = self.manifest(song)
                 part = ({**m["mix_files"], **m.get("files", {})}.get(track) or {}).get("part", "other")
                 src = d / track
                 t = time.time()
-                notes, raw = transcribe.transcribe(src, part, model)
+                st = self.tr_status[(song, track)]
+                notes, raw = transcribe.transcribe(src, part, model, lambda f, st=st: st.__setitem__("progress", round(f, 3)))
                 f = self.notes_path(d, track)
                 f.parent.mkdir(exist_ok=True)
                 f.write_text(json.dumps({"version": transcribe.VERSION, "stamp": src.stat().st_mtime, "model": model,

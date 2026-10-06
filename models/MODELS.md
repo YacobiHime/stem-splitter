@@ -68,7 +68,15 @@
 | 金管 | `bs_mega_53stem_brass_mvsep.ckpt` | `e7d7bf86a031f3253019ff9dc424485d8085946fc428ab66522c568ee17b8027` |
 | 会話 / サウンドトラック / 効果音 | `model_bandit_plus_dnr_sdr_11.47.ckpt` | `c48284779f7d1258a6527d3aaa18a532d45c1f506e2dcc25d5ab179a8c5e2573` |
 
+| コーラスを声質で2つ（男声/女声モデル） | `model_chorus_bs_roformer_ep_267_sdr_24.1275.ckpt` | `123c00786bdbc6bd462dddb35cd21fd6ae99ab8319f93f63a8abc1012e593d94` |
+| コーラスを2人の歌い手に | `model_mel_band_roformer_ep_0_sdr_7.9319_fixed.ckpt` | `9ae8ae1a7d2fab0a7c405fee27ac8332702a31d689de58c9fb6f63b30410832b` |
+| コーラスを4声（S/A/T/B、合唱用） | `model_scnet_ep_36_sdr_5.4596.ckpt` | `1e104ce6f6733542f8356ac2e59f2b7ece49ebfd2713d1ff635806de5ceb483f` |
+| まとめたパートからピアノ（「さらに分離」） | `bs_mega_53stem_piano_mvsep.ckpt` | `8e58ad544386136028ec1f5764bb95a235235492144112d94782ff1333905fe9` |
+
 ほかに、既存の Resurrection / karaoke / BS-Roformer-SW / gilliaan strings / Mega53 の synth・organ・keys を組み合わせて使う。
+
+コーラスを分けるモデルについて（FIRE BIRD・春日影の30秒で試した結果）: どれも女性ボーカルの曲なので、男声/女声モデルは「声の高さ」ではなく声質で分けている
+（2つの出力の中心の音の高さはほぼ同じ）。そのため画面では「声1 / 声2」と表示する。karaoke モデルをコーラスにかける方法も試したが、全部が片方に入って分けられなかった。
 
 ## ノーツ表示（MIDI 化）
 

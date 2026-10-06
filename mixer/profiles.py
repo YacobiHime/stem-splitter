@@ -8,7 +8,8 @@ profile = {
     "guitar": "one" | "split" | null,      split = acoustic + electric
     "bass" | "piano" | "keys" | "synth" | "organ" | "strings" | "woodwind" | "brass": true / false
   },
-  "hifi": bool                     # test-time augmentation (about 3x slower) + lossless ALAC files
+  "hifi": bool,                    # test-time augmentation (about 3x slower) + lossless ALAC files
+  "refine": {part: method}         # split a mixer part further (any mode), see REFINE
 }
 
 standard = config.yaml as it is (keyboard transcription set). The other modes are cascades:
@@ -36,6 +37,35 @@ CASCADE = [
 SIX_PARTS = ("drums", "bass", "guitar", "piano")
 TOGGLES = ("bass", "piano", "keys", "synth", "organ", "strings", "woodwind", "brass")
 
+# ---- splitting one mixer part further ("refine"). Every method keeps the sum exact: what the
+# models leave is the "<part>-rest" track (dropped when empty).
+GENDER = "model_chorus_bs_roformer_ep_267_sdr_24.1275.ckpt"      # male / female chorus (Sucial)
+DUET = "model_mel_band_roformer_ep_0_sdr_7.9319_fixed.ckpt"        # two singers
+SATB = "model_scnet_ep_36_sdr_5.4596.ckpt"                         # soprano / alto / tenor / bass (choir)
+PIANO = "bs_mega_53stem_piano_mvsep.ckpt"
+VOCAL_PARTS = ("chorus", "vocals", "lead")
+INSTRUMENT_PARTS = ("keyboards", "upper", "other", "instrumental", "music", "rest_six")
+# method -> (parts it applies to, [(model, {model stem: piece suffix})] applied one after another to the remainder)
+REFINE = {
+    "voice2": (VOCAL_PARTS, [(GENDER, {"male": "v1", "female": "v2"})]),
+    "duet": (VOCAL_PARTS, [(DUET, {"singer_1": "s1", "singer_2": "s2"})]),
+    "satb": (VOCAL_PARTS, [(SATB, {"soprano": "soprano", "alto": "alto", "tenor": "tenor", "bass": "bass"})]),
+    "lead_chorus": (("vocals",), [(KARAOKE, {"Vocals": "lead"})]),
+    "kit": (("drums",), [(DRUMSEP, {"kick": "kick", "snare": "snare", "toms": "toms", "hh": "hihat",
+                                    "ride": "ride", "crash": "crash"})]),
+    "acoustic": (("guitar",), [(ACOUSTIC, {"acoustic-guitar": "acoustic-guitar"})]),
+    "instruments": (INSTRUMENT_PARTS, [(PIANO, {"piano": "piano"})] +
+                    [(m, {stem: "keys" if part == "keyboards" else part}) for part, m, stem in CASCADE]),
+}
+# piece names that read better without the parent prefix (if the name is still free)
+PLAIN = {"kick", "snare", "toms", "hihat", "piano", "strings", "woodwind", "brass", "organ", "synth", "keys", "acoustic-guitar"}
+REST_NAME = {"acoustic": "electric-guitar"}          # what is left has a proper name for some methods
+
+
+def refine_methods(part):
+    """Methods that can split this mixer part further."""
+    return [m for m, (parts, _) in REFINE.items() if part in parts or (part.startswith("chorus") and "chorus" in parts)]
+
 
 def normalize(profile):
     p = dict(profile or {})
@@ -52,7 +82,12 @@ def normalize(profile):
             parts[k] = bool(src.get(k))
         if not any(parts.values()):
             raise ValueError("分離するパートを1つ以上選んでください")
-    return {"mode": mode, "parts": parts, "hifi": bool(p.get("hifi"))}
+    refine = {}
+    for part, method in (p.get("refine") or {}).items():
+        if method not in REFINE:
+            raise ValueError(f"unknown split method: {method}")
+        refine[str(part)] = method
+    return {"mode": mode, "parts": parts, "hifi": bool(p.get("hifi")), "refine": refine}
 
 
 def model_steps(p):
@@ -126,17 +161,72 @@ def build_steps(p):
     return steps, tracks
 
 
+def apply_refine(steps, tracks, refine):
+    """Replace each refined mixer part by its pieces (in place); returns {piece: parent}."""
+    parents = {}
+    for part, method in refine.items():
+        if part not in tracks:
+            continue                                   # e.g. a part that this mode does not have
+        allowed, chain = REFINE[method]
+        if part not in allowed and not (part.startswith("chorus") and "chorus" in allowed):
+            raise ValueError(f"{part} cannot be split with {method}")
+        key = part.replace("-", "_")
+        srcs = tracks[part]
+        if len(srcs) == 1 and not srcs[0].startswith("-"):
+            rest = srcs[0]
+        else:                                          # the part is a sum: make it a file first
+            rest = f"ref_{key}_in"
+            steps.append({"name": f"ref_{key}_in", "combine": list(srcs), "output": rest})
+        pieces = {}
+        for i, (model, stems) in enumerate(chain):
+            outs = {stem: f"ref_{key}_{suffix.replace('-', '_')}" for stem, suffix in stems.items()}
+            steps.append({"name": f"ref_{key}_{i}", "model": model, "input": rest, "outputs": outs})
+            taken = list(outs.values())
+            nxt = f"ref_{key}_rest{i}"
+            steps.append({"name": f"ref_{key}_rest{i}", "combine": [rest] + [f"-{w}" for w in taken], "output": nxt})
+            for stem, suffix in stems.items():
+                name = suffix if suffix in PLAIN else f"{part}-{suffix}"
+                if name in tracks and name != part:
+                    name = f"{part}-{suffix}"
+                pieces.setdefault(name, []).append(outs[stem])
+            rest = nxt
+        if method == "kit":                            # cymbals = ride + crash, like the custom drum split
+            pieces = {("cymbals" if k.endswith("ride") else k): v for k, v in pieces.items() if not k.endswith("crash")}
+            pieces["cymbals"] = [f"ref_{key}_ride", f"ref_{key}_crash"]
+        if method == "lead_chorus":
+            pieces = {"lead": [f"ref_{key}_lead"]}
+            pieces["chorus"] = [rest]
+        else:
+            pieces[REST_NAME.get(method, f"{part}-rest")] = [rest]
+        new = {}
+        for k, v in tracks.items():                    # keep the order: the pieces go where the part was
+            if k == part:
+                new.update(pieces)
+            else:
+                new[k] = v
+        tracks.clear()
+        tracks.update(new)
+        parents.update({piece: part for piece in pieces})
+    return parents
+
+
 def build_config(base, profile):
     """A full pipeline config for this profile (None = use config.yaml unchanged)."""
     p = normalize(profile)
-    if p["mode"] == "standard" and not p["hifi"]:
+    if p["mode"] == "standard" and not p["hifi"] and not p["refine"]:
         return None
     cfg = copy.deepcopy(base)
     cfg["profile"] = p
+    if p["mode"] == "standard" and p["refine"]:
+        tracks = {k: list(v) if isinstance(v, list) else [v] for k, v in cfg["mixer"]["tracks"].items()}
+        cfg["mixer"]["parents"] = apply_refine(cfg["steps"], tracks, p["refine"])
+        cfg["mixer"]["tracks"] = tracks
     if p["mode"] != "standard":
         steps, tracks = build_steps(p)
+        parents = apply_refine(steps, tracks, p["refine"])
         cfg["steps"] = steps
-        cfg["mixer"] = {"enabled": True, "tracks": tracks}
+        cfg["mixer"] = {"enabled": True, "tracks": tracks, "parents": parents,
+                        "drop_threshold_db": (base.get("mixer") or {}).get("drop_threshold_db", -50.0)}
         # Audacity files: the original + the same parts as the mixer
         cfg["deliverables"] = {"original": "original", **tracks}
         cfg["drop_silent"] = {**(cfg.get("drop_silent") or {}), "keep_always": ["original"]}

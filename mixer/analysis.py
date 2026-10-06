@@ -85,14 +85,15 @@ def analyze(tracks):
     zero = np.zeros(n, dtype=np.float32)
     inst = sum((v for k, v in y.items() if k not in LEAD_PARTS), zero)
     # harmony: everything but drums, lead vocal and bass (the bass is used separately for roots)
-    harm = sum((CHORUS_WEIGHT.get(k, 1.0) * v for k, v in y.items() if k not in DRUM_PARTS | LEAD_PARTS | {"bass"}), zero)
+    harm = sum(((0.4 if k.startswith("chorus") else 1.0) * v for k, v in y.items()
+                if k not in DRUM_PARTS | LEAD_PARTS | {"bass", "drums-rest"}), zero)
     if not np.any(harm):
         harm = sum(y.values())
     if not np.any(inst):
         inst = sum(y.values())
     bass = y.get("bass", zero)
 
-    harm_mix = sum((v for k, v in y.items() if k not in DRUM_PARTS | LEAD_PARTS), zero)
+    harm_mix = sum((v for k, v in y.items() if k not in DRUM_PARTS | LEAD_PARTS | {"drums-rest"}), zero)
     if not np.any(harm_mix):
         harm_mix = sum(y.values())
     met = meter.track(sum(y.values()), SR, harm=harm_mix) if meter.available() else None

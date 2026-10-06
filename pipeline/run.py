@@ -536,6 +536,9 @@ def build_deliverables(song, cfg, models, steps):
         dst.parent.mkdir(exist_ok=True)
         mix_files[mix_names[out_name]] = {"part": out_name, "source": source_expr(mix_parts[out_name]),
                                           **save(dst, a, f"{song.name}_mix_{out_name}")}
+        parent = (mix_cfg.get("parents") or {}).get(out_name)
+        if parent:
+            mix_files[mix_names[out_name]]["parent"] = parent      # split from this part (mixer "さらに分離")
 
     used = {}
     for step in steps:

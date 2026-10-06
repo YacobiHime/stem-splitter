@@ -14,7 +14,11 @@ removed, and for the lead vocal one note at a time with vibrato wobble merged.
 Notes are [start s, end s, midi pitch, velocity 1-127] in the time of the original song.
 """
 
+import contextlib
+import io
+import math
 import os
+import re
 import tempfile
 import warnings
 
@@ -23,14 +27,16 @@ import soundfile as sf
 
 from pipeline import audio
 
-VERSION = 1
+VERSION = 3
 # kind -> cleanup settings
 PROFILES = {
-    "keys":    dict(lo=21, hi=108, min_len=0.06, join_gap=0.03, min_amp=0.18, voices=10),
+    # keyboards: no joining — a short gap between same-pitch notes is a new key press, not one held note
+    # (and no melodia trick: it adds onset-less "continuation" notes; without it every note is a detected press)
+    "keys":    dict(lo=21, hi=108, min_len=0.06, join_gap=-1, min_amp=0.18, voices=10, melodia=False),
     "pad":     dict(lo=24, hi=103, min_len=0.12, join_gap=0.10, min_amp=0.22, voices=8),
     "strings": dict(lo=28, hi=100, min_len=0.12, join_gap=0.10, min_amp=0.22, voices=8),
     "bass":    dict(lo=23, hi=67, min_len=0.08, join_gap=0.05, min_amp=0.20, voices=1),
-    "guitar":  dict(lo=40, hi=96, min_len=0.06, join_gap=0.04, min_amp=0.20, voices=6),
+    "guitar":  dict(lo=40, hi=96, min_len=0.06, join_gap=-1, min_amp=0.20, voices=6, melodia=False),
     "lead":    dict(lo=45, hi=88, min_len=0.09, join_gap=0.06, min_amp=0.20, voices=1, vibrato=True),
     "chorus":  dict(lo=45, hi=91, min_len=0.10, join_gap=0.08, min_amp=0.22, voices=3, vibrato=True),
     "other":   dict(lo=21, hi=108, min_len=0.08, join_gap=0.05, min_amp=0.22, voices=8),
@@ -43,33 +49,80 @@ KIND_OF = {
 }
 # parts worth transcribing (drums, speech, effects... are not)
 PITCHED = set(KIND_OF) | {"other", "instrumental", "music", "original"}
+UNPITCHED = {"drums", "kick", "snare", "toms", "hihat", "cymbals", "drums-other", "drums-rest", "speech", "effects"}
+
+
+def is_pitched(part):
+    """Parts worth turning into notes, including pieces split off in the mixer ("chorus-v1", "keyboards-rest")."""
+    return part not in UNPITCHED and (part in PITCHED or part.startswith(("chorus", "vocals")) or part.endswith("-rest")
+                                      or part.endswith("-guitar"))
 
 _bp_model = None
 _piano_model = None
 
 
 def kind_of(part):
-    return KIND_OF.get(part, "other")
+    if part in KIND_OF:
+        return KIND_OF[part]
+    if part.startswith("chorus"):
+        return "chorus"
+    if part.startswith("vocals"):
+        return "lead"
+    return KIND_OF.get(part.rsplit("-rest", 1)[0], "other")
 
 
-def basic_pitch_notes(y, sr):
-    """Raw Basic Pitch note events [(start, end, pitch, amplitude)] for mono audio."""
+def basic_pitch_notes(y, sr, melodia=True, progress=lambda f: None):
+    """Raw Basic Pitch note events [(start, end, pitch, amplitude)] for mono audio.
+    melodia: Basic Pitch's "melodia trick" (also follows held notes that have no detected onset).
+    progress(f) is called with 0..1 while the model runs."""
     global _bp_model
     warnings.filterwarnings("ignore")
     from basic_pitch import FilenameSuffix, build_icassp_2022_model_path
+    from basic_pitch.constants import AUDIO_N_SAMPLES, AUDIO_SAMPLE_RATE, FFT_HOP
     from basic_pitch.inference import Model, predict
+
+    class CountingModel(Model):
+        """The loaded model, reporting progress: predict() runs once per audio window.
+        (Basic Pitch only accepts Model instances, hence a subclass that skips loading.)"""
+
+        def __init__(self, inner, total):
+            self.inner, self.total, self.n = inner, total, 0
+
+        def predict(self, x):
+            out = self.inner.predict(x)
+            self.n += 1
+            progress(min(1.0, self.n / self.total))
+            return out
 
     if _bp_model is None:
         _bp_model = Model(build_icassp_2022_model_path(FilenameSuffix.onnx))
+    # same windowing as basic_pitch.inference.run_inference (30 overlapping frames)
+    overlap = 30 * FFT_HOP
+    hop = AUDIO_N_SAMPLES - overlap
+    windows = max(1, math.ceil((len(y) * AUDIO_SAMPLE_RATE / sr + overlap // 2) / hop))
     with tempfile.TemporaryDirectory(prefix="bp-") as tmp:      # Basic Pitch reads a file
         wav = os.path.join(tmp, "in.wav")
         sf.write(wav, y, sr, subtype="FLOAT")
-        _, _, events = predict(wav, _bp_model, onset_threshold=0.5, frame_threshold=0.3,
-                               minimum_note_length=58, melodia_trick=True)
+        _, _, events = predict(wav, CountingModel(_bp_model, windows), onset_threshold=0.5,
+                               frame_threshold=0.3, minimum_note_length=58, melodia_trick=melodia)
     return [(float(s), float(e), int(p), float(a)) for s, e, p, a, _ in events]
 
 
-def piano_notes(y, sr):
+class _SegmentProgress(io.StringIO):
+    """The piano model prints "Segment i / N" while it runs; turn that into progress."""
+
+    def __init__(self, progress):
+        super().__init__()
+        self.progress = progress
+
+    def write(self, s):
+        m = re.search(r"Segment (\d+) / (\d+)", s)
+        if m:
+            self.progress(int(m.group(1)) / max(1, int(m.group(2))))
+        return len(s)
+
+
+def piano_notes(y, sr, progress=lambda f: None):
     """Raw ByteDance piano model note events [(start, end, pitch, velocity/127)]."""
     global _piano_model
     import librosa
@@ -79,7 +132,7 @@ def piano_notes(y, sr):
     if _piano_model is None:
         _piano_model = PianoTranscription(device="cuda" if torch.cuda.is_available() else "cpu", checkpoint_path=None)
     y16 = librosa.resample(y, orig_sr=sr, target_sr=sample_rate)
-    with tempfile.TemporaryDirectory(prefix="pt-") as tmp:
+    with tempfile.TemporaryDirectory(prefix="pt-") as tmp, contextlib.redirect_stdout(_SegmentProgress(progress)):
         out = _piano_model.transcribe(y16, os.path.join(tmp, "out.mid"))
     return [(float(e["onset_time"]), float(e["offset_time"]), int(e["midi_note"]), e["velocity"] / 127)
             for e in out["est_note_events"]]
@@ -143,8 +196,16 @@ def clean(events, kind):
     return [[round(e[0], 4), round(e[1], 4), int(e[2]), int(np.clip(round(30 + 97 * e[3] / vmax), 1, 127))] for e in out]
 
 
-def transcribe(path, part, model="basic"):
-    """Notes for one track file. model: "basic" or "piano"."""
+def transcribe(path, part, model="basic", progress=lambda f: None):
+    """Notes for one track file. model: "basic" or "piano". progress(f): 0..1 over the whole job
+    (decoding 0-5%, the model 5-85%, turning its output into notes and cleaning 85-100%)."""
+    progress(0.0)
     y = audio.decode(path, sample_rate=44100, channels=1)[:, 0]
-    raw = piano_notes(y, 44100) if model == "piano" else basic_pitch_notes(y, 44100)
-    return clean(raw, kind_of(part)), len(raw)
+    progress(0.05)
+    kind = kind_of(part)
+    step = lambda f: progress(0.05 + 0.8 * f)
+    raw = piano_notes(y, 44100, step) if model == "piano" else basic_pitch_notes(y, 44100, PROFILES[kind].get("melodia", True), step)
+    progress(0.9)
+    notes = clean(raw, kind)
+    progress(1.0)
+    return notes, len(raw)

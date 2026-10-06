@@ -212,6 +212,11 @@ input[type=range]::-moz-range-thumb { width: 18px; height: 18px; border-radius: 
 }
 @media (min-width: 761px) { .lrow .meta { display: none; } }
 
+/* separation running for the song in the player */
+.pjob { display: grid; grid-template-columns: auto 1fr 3.4em; gap: 12px; align-items: center; margin: -6px 0 14px; color: var(--muted); font-size: 13px; }
+.pjob .pbar { margin-top: 0; height: 6px; }
+.pjob .pp { text-align: right; color: var(--text); font-variant-numeric: tabular-nums; }
+
 /* falling notes */
 .notesv { display: flex; flex-direction: column; gap: 8px; }
 .nbar { display: flex; justify-content: space-between; align-items: center; gap: 10px; flex-wrap: wrap; }
@@ -219,7 +224,11 @@ input[type=range]::-moz-range-thumb { width: 18px; height: 18px; border-radius: 
 .npart { display: flex; align-items: center; gap: 6px; height: 34px; padding: 0 12px 0 10px; border-radius: 17px; border: 1px solid var(--line2); font-size: 13.5px; }
 .npart i { width: 12px; height: 12px; border-radius: 3px; }
 .npart.off { opacity: .4; }
-.nstat { color: var(--muted); font-size: 13px; min-height: 1.4em; }
+.nstat { color: var(--muted); font-size: 13px; min-height: 1.4em; display: flex; flex-direction: column; gap: 6px; }
+.nprog { display: grid; grid-template-columns: minmax(70px, 9em) 1fr 3.4em; align-items: center; gap: 10px; }
+.nprog .pbar { margin-top: 0; height: 6px; border-radius: 3px; }
+.nprog .pbar i { transition: width .35s linear; }
+.nprog .np { text-align: right; font-variant-numeric: tabular-nums; color: var(--text); }
 #nCanvas { width: 100%; height: clamp(300px, calc(100dvh - 380px), 900px); border-radius: 14px; background: #10141a; display: block; }
 @media (max-width: 760px) { #nCanvas { height: clamp(240px, calc(100dvh - 500px), 700px); } .nbar .btn { height: 36px; padding: 0 10px; font-size: 13px; } }
 
@@ -351,6 +360,7 @@ input[type=range]::-moz-range-thumb { width: 18px; height: 18px; border-radius: 
 
     <div class="strip" id="strip"><div class="strip-inner" id="stripInner"></div><div class="strip-msg" id="stripMsg">解析中…</div></div>
 
+    <div class="pjob" id="pJob" hidden><span class="pl"></span><div class="pbar"><i></i></div><span class="pp"></span></div>
     <section class="tracks" id="vMixer"></section>
     <section id="vChart" hidden></section>
     <section id="vNotes" class="notesv" hidden>
@@ -436,7 +446,27 @@ const NAMES = {
   kick: "キック", snare: "スネア", toms: "タム", hihat: "ハイハット", cymbals: "シンバル", "drums-other": "ドラム(残り)",
   "acoustic-guitar": "アコギ", "electric-guitar": "エレキ", woodwind: "木管", brass: "金管",
   speech: "会話", music: "サウンドトラック", effects: "効果音",
+  "chorus-v1": "コーラス 声1", "chorus-v2": "コーラス 声2", "chorus-s1": "コーラス 歌い手1", "chorus-s2": "コーラス 歌い手2",
+  "chorus-soprano": "コーラス S", "chorus-alto": "コーラス A", "chorus-tenor": "コーラス T", "chorus-bass": "コーラス B",
+  "drums-rest": "ドラム(残り)", "keys": "キーズ",
 };
+// display name of a part, including pieces split off in the mixer ("chorus-rest" -> "コーラス（残り）")
+function partName(p) {
+  if (NAMES[p]) return NAMES[p];
+  if (p.endsWith("-rest")) { const b = p.slice(0, -5); return `${NAMES[b] || b}（残り）`; }
+  return p;
+}
+const partIcon = (p) => ICON[p] || (p.startsWith("chorus") ? ICON.chorus : ICON[p.replace(/-rest$/, "")] || ICON.note);
+// splitting a mixer part further (mixer/profiles.py REFINE)
+const REFINE_UI = [
+  ["voice2", "声質で2つに分ける", (p) => ["chorus", "vocals", "lead"].includes(p) || p.startsWith("chorus")],
+  ["duet", "2人の歌い手に分ける", (p) => ["chorus", "vocals", "lead"].includes(p) || p.startsWith("chorus")],
+  ["satb", "4声（ソプラノ・アルト・テナー・バス）に分ける・精度は低め", (p) => ["chorus", "vocals", "lead"].includes(p) || p.startsWith("chorus")],
+  ["lead_chorus", "リードとコーラスに分ける", (p) => p === "vocals"],
+  ["kit", "キック・スネア・タム・ハイハット・シンバルに分ける", (p) => p === "drums"],
+  ["acoustic", "アコギとエレキに分ける", (p) => p === "guitar"],
+  ["instruments", "ピアノ・弦・シンセ・オルガンなどに分ける", (p) => ["keyboards", "upper", "other", "instrumental", "music"].includes(p)],
+];
 const SHARP = ["C","C#","D","D#","E","F","F#","G","G#","A","A#","B"];
 const FLAT  = ["C","Db","D","Eb","E","F","Gb","G","Ab","A","Bb","B"];
 const ICON = {
@@ -1015,7 +1045,7 @@ const ro = new ResizeObserver((es) => {
 /* ================================================================ track rows */
 function trackRow(t, colorIdx) {
   const el = document.createElement("div"); el.className = "trk";
-  el.innerHTML = `<button class="icon" title="${esc(t.label)}（タップでミュート）" aria-label="${esc(t.label)} のミュート">${svg(ICON[t.part] || ICON.note)}<span class="badge">S</span></button>
+  el.innerHTML = `<button class="icon" title="${esc(t.label)}（タップでミュート）" aria-label="${esc(t.label)} のミュート">${svg(partIcon(t.part))}<span class="badge">S</span></button>
     <div class="vol"><input type="range" min="${MIN_DB}" max="${MAX_DB}" step="0.5" aria-label="${esc(t.label)} の音量"><span class="val"></span></div>
     <canvas class="wave" aria-label="${esc(t.label)} の波形（タップで移動・横ドラッグで区間選択）"></canvas>
     <button class="menu" title="${esc(t.label)} の設定" aria-label="${esc(t.label)} の設定">${svg(UI_ICON.more)}</button>`;
@@ -1046,7 +1076,7 @@ function renderChips() {
   const extras = tracks.filter((t) => t.group === "extra");
   $("chips").replaceChildren(...extras.map((t) => {
     const b = document.createElement("button"); b.className = "chip" + (t.shown ? " on" : "");
-    b.innerHTML = `${svg(ICON[t.part] || ICON.note)}<span>${esc(t.label)}</span>`;
+    b.innerHTML = `${svg(partIcon(t.part))}<span>${esc(t.label)}</span>`;
     b.title = t.shown ? `${t.label} を外す` : `${t.label} を重ねる（ミックスに足される）`;
     b.addEventListener("click", () => {
       t.shown = !t.shown;
@@ -1100,7 +1130,11 @@ function trackMenu(t, anchor) {
       <button class="btn ${t.solo ? "on" : ""}" id="mSolo">ソロ</button>
       <button class="btn" id="mZero">0 dB・中央に戻す</button>
       ${t.group === "extra" ? '<button class="btn" id="mHide">外す</button>' : ""}
-    </div>`, (pop) => {
+    </div>
+    ${t.group === "mix" && REFINE_UI.some(([, , ok]) => ok(t.part)) ? `<h3 style="margin:16px 0 8px">さらに分離</h3>
+      <div class="btns">${REFINE_UI.filter(([, , ok]) => ok(t.part)).map(([m, l]) => `<button class="btn" data-refine="${m}">${l}</button>`).join("")}</div>` : ""}
+    ${t.parent ? `<div class="btns" style="margin-top:12px"><button class="btn" id="mMerge">「${esc(partName(t.parent))}」にまとめ直す</button></div>` : ""}
+    ${t.group === "mix" && (REFINE_UI.some(([, , ok]) => ok(t.part)) || t.parent) ? '<p class="sub">分離し直したパートだけ処理するので速い（数秒〜数十秒）。終わると読み込み直す。分けたパートを足すと元のパートと同じ音になる（分けきれなかった音は「残り」）。</p>' : ""}`, (pop) => {
     const vol = bindRange(pop, "mVol", fdb, (v) => { t.db = v; t.draw(); applyGains(); });
     const pan = bindRange(pop, "mPan", fpan, (v) => { t.pan = Math.abs(v) < 0.03 ? 0 : v; applyGains(); });
     pop.querySelector("#mMute").onclick = (e) => { t.mute = !t.mute; e.currentTarget.classList.toggle("on", t.mute); applyGains(); };
@@ -1108,7 +1142,27 @@ function trackMenu(t, anchor) {
     pop.querySelector("#mZero").onclick = () => { t.db = 0; t.pan = 0; t.draw(); vol.set(0); pan.set(0); applyGains(); };
     const h = pop.querySelector("#mHide");
     if (h) h.onclick = () => { t.shown = false; t.solo = false; closePop(); renderRows(); renderChips(); };
+    pop.querySelectorAll("[data-refine]").forEach((b) => { b.onclick = () => {
+      closePop();
+      const prof = currentProfile(); prof.refine = { ...(prof.refine || {}), [t.part]: b.dataset.refine };
+      reseparate(song, prof, `「${t.label}」を分離しています`);
+    }; });
+    const mg = pop.querySelector("#mMerge");
+    if (mg) mg.onclick = () => {
+      closePop();
+      const prof = currentProfile(), refine = { ...(prof.refine || {}) };
+      delete refine[t.parent]; prof.refine = refine;
+      reseparate(song, prof, `「${partName(t.parent)}」にまとめ直しています`);
+    };
   });
+}
+const currentProfile = () => JSON.parse(JSON.stringify(song.profile || { mode: "standard" }));
+async function reseparate(s, profile, message) {
+  const r = await fetch(`/api/reseparate?song=${encodeURIComponent(s.dir)}&profile=${encodeURIComponent(JSON.stringify(profile))}`,
+    { method: "POST", credentials: "same-origin" });
+  if (!r.ok) { toast("分離し直せません: " + (await r.text()), 6000); return; }
+  toast(message || `「${s.title}」を分離し直します`, 3000);
+  pollJobs();
 }
 function bpmPop() {
   const label = () => { const d = displayBpm(wantTempo); return d ? `${d.unit ? d.unit + " = " : ""}${d.bpm} BPM` : `${Math.round(wantTempo * 100)}%`; };
@@ -1322,7 +1376,7 @@ async function openSong(dir) {
   const st = store.get("song:" + song.dir, {}), lv = st.lv || {};
   tracks = song.tracks.map((x) => {
     const d = { db: 0, mute: false, solo: false, pan: 0, shown: x.group === "mix" };
-    return { ...x, ...d, ...(lv[x.id] || {}), label: NAMES[x.part] || x.part, cache: new Map(), gain: null, panner: null };
+    return { ...x, ...d, ...(lv[x.id] || {}), label: partName(x.part), cache: new Map(), gain: null, panner: null };
   });
   if (ctx) for (const t of tracks) attachNodes(t);
   const lp = st.loop || {};
@@ -1366,7 +1420,9 @@ const STEP_JA = { convert: "読み込み", vocals: "ボーカル分離", karaoke
   strings: "ストリングス", mega_synth: "シンセ", mega_keys: "キーズ", mega_organ: "オルガン", mega_digital_piano: "デジタルピアノ",
   mega_back_vocal: "バックボーカル", deliverables: "書き出し", analysis: "拍・コード解析",
   dnr: "会話/音楽/効果音", drumsep: "ドラムの分解", acoustic: "アコギ/エレキ" };
-const stepName = (k) => STEP_JA[k] || (k.startsWith("take_") ? (NAMES[k.slice(5)] || k.slice(5)) : (k.startsWith("rest") || k.endsWith("_rest")) ? "残りの計算" : k);
+const stepName = (k) => STEP_JA[k] || (k.startsWith("take_") ? partName(k.slice(5))
+  : /^ref_.+_\d+$/.test(k) ? `${partName(k.slice(4).replace(/_\d+$/, "").replace(/_/g, "-"))}を分離`
+  : (k.startsWith("rest") || k.endsWith("_rest") || /_rest\d*$/.test(k) || k.endsWith("_in")) ? "残りの計算" : k);
 
 function showLibrary() {
   $("library").hidden = false; $("player").hidden = true; $("app").classList.add("lib-mode"); closePop();
@@ -1408,14 +1464,26 @@ async function pollJobs() {
         const d = jobs.find((j) => j.status === "done" && prev.some((p) => p.id === j.id && p.status !== "done"));
         toast(`「${d.song}」の分離が終わりました`, 4000);
         await refreshSongs();
+        if (song && d.song === song.dir && !isLib()) {        // the open song changed: load its new tracks
+          const pos = currentPos(), dir = song.dir;
+          song = null; await openSong(dir); pausedPos = Math.min(pos, total); dirty = true;
+        }
       }
     }
   } catch {}
-  renderLibrary();
+  renderLibrary(); renderPlayerJob();
   const active = jobs.some((j) => ["queued", "running", "analyzing"].includes(j.status)) || uploads.length;
   jobTimer = setTimeout(pollJobs, active ? 1500 : isLib() ? 8000 : 20000);
 }
 
+function renderPlayerJob() {
+  const el = $("pJob"), j = song && jobs.find((x) => x.song === song.dir && ["queued", "running", "analyzing"].includes(x.status));
+  el.hidden = !j;
+  if (!j) return;
+  el.querySelector(".pl").textContent = j.status === "queued" ? "分離の順番待ち" : `分離中: ${j.step ? stepName(j.step) : "準備中"}`;
+  el.querySelector("i").style.width = `${Math.round(j.progress * 100)}%`;
+  el.querySelector(".pp").textContent = `${Math.round(j.progress * 100)}%`;
+}
 function libRowEl(cls) { const d = document.createElement("div"); d.className = "lrow " + cls; return d; }
 function renderLibrary() {
   if (!isLib()) return;
@@ -1597,7 +1665,7 @@ function sepTracks(p) {   // [model runs, tracks] like mixer/profiles.py
 function openSeparation(title, init, onSend) {
   const last = store.get("sepProfile", { mode: "standard", parts: {}, hifi: false });
   const p = init || last;
-  sepState = { mode: p.mode || "standard", parts: { ...(p.parts || {}) }, hifi: !!p.hifi };
+  sepState = { mode: p.mode || "standard", parts: { ...(p.parts || {}) }, hifi: !!p.hifi, refine: { ...(p.refine || {}) } };
   sepOpen = {}; sepSend = onSend;
   $("sepTitle").textContent = title;
   $("sepHifi").checked = sepState.hifi;
@@ -1621,6 +1689,13 @@ function renderSeparation() {
       body.push(`<div class="sub-opts"><button class="btn ${v === "one" ? "on" : ""}" data-sub="${k}:one">まとめて</button><button class="btn ${v === "split" ? "on" : ""}" data-sub="${k}:split">${splitLabel}</button><button class="btn ${!v ? "on" : ""}" data-sub="${k}:off">分けない</button></div>`);
     }
   }
+  // chorus: only when the setting has a chorus track
+  if (st.mode === "standard" || (st.mode === "custom" && st.parts.vocals === "split")) {
+    const cur = st.refine.chorus || "";
+    body.push(`<h2>コーラスの分け方</h2><div class="btns" style="margin-bottom:6px">${[["", "分けない"], ["voice2", "声質で2つ"], ["duet", "2人の歌い手"], ["satb", "4声（S・A・T・B）"]]
+      .map(([v, l]) => `<button class="btn ${cur === v ? "on" : ""}" data-chorus="${v}">${l}</button>`).join("")}</div>
+      <p class="sub" style="margin-bottom:8px">コーラスをさらにパートに分ける（分けきれなかった音は「コーラス（残り）」）。4声は合唱用のモデルで精度は低め。あとからプレイヤーのトラックの「…」→「さらに分離」でも変えられる。</p>`);
+  }
   body.push("<h2>マルチメディアセパレーション</h2>");
   body.push(opt("basic", st.mode === "dnr", ICON.effects, "会話、サウンドトラック、効果音", "動画・映画の音声向け（3トラック）", 'data-mode="dnr"'));
   $("sepBody").innerHTML = body.join("");
@@ -1632,6 +1707,8 @@ function renderSeparation() {
 }
 $("sepBody").addEventListener("click", (e) => {
   const st = sepState;
+  const ch = e.target.closest("[data-chorus]");
+  if (ch) { if (ch.dataset.chorus) st.refine.chorus = ch.dataset.chorus; else delete st.refine.chorus; renderSeparation(); return; }
   const chev = e.target.closest("[data-chev]");
   if (chev) { e.stopPropagation(); const k = chev.dataset.chev; sepOpen[k] = !sepOpen[k]; renderSeparation(); return; }
   const sub = e.target.closest("[data-sub]");
@@ -1656,7 +1733,8 @@ $("sepHifi").onchange = (e) => { sepState.hifi = e.target.checked; renderSeparat
 $("sepClose").onclick = () => { $("sep").hidden = true; };
 $("sep").addEventListener("click", (e) => { if (e.target === $("sep")) $("sep").hidden = true; });
 $("sepSend").onclick = () => {
-  const st = sepState, profile = { mode: st.mode, hifi: st.hifi };
+  const st = sepState, profile = { mode: st.mode, hifi: st.hifi, refine: { ...st.refine } };
+  if (!(st.mode === "standard" || (st.mode === "custom" && st.parts.vocals === "split"))) delete profile.refine.chorus;
   if (st.mode === "custom") {
     profile.parts = {};
     for (const [k] of SEP_PARTS) if (st.parts[k]) profile.parts[k] = SPLITTABLE.includes(k) ? st.parts[k] : true;
@@ -1674,7 +1752,7 @@ const KIND = { piano: "keys", "digital-piano": "keys", keys: "keys", keyboards: 
   "acoustic-guitar": "guitar", "electric-guitar": "guitar", lead: "lead", vocals: "lead", chorus: "chorus" };
 const GM_PROGRAM = { keys: 0, pad: 89, strings: 48, bass: 33, guitar: 27, lead: 53, chorus: 52, other: 0 };
 let notesData = {}, notesPrepared = {}, notesTimer = 0;
-const nPrefs = Object.assign({ win: 3, quant: 0, hidden: {} }, store.get("notesPrefs", {}));
+const nPrefs = Object.assign({ win: 3, quant: 0, hidden: {}, len: "next" }, store.get("notesPrefs", {}));
 const saveNPrefs = () => store.set("notesPrefs", nPrefs);
 
 async function loadNotes() {
@@ -1688,11 +1766,11 @@ async function loadNotes() {
   } catch { return; }
   notesPrepared = {};
   renderNotesBar();
-  if (Object.values(notesData).some((e) => e.status === "queued" || e.status === "running")) notesTimer = setTimeout(loadNotes, 2000);
+  if (Object.values(notesData).some((e) => e.status === "queued" || e.status === "running")) notesTimer = setTimeout(loadNotes, 400);
 }
 const doneTracks = () => Object.entries(notesData).filter(([, e]) => e.status === "done");
 function trackColor(id) { const ids = doneTracks().map(([k]) => k); return NOTE_COLORS[Math.max(0, ids.indexOf(id)) % NOTE_COLORS.length]; }
-const trackLabel = (id) => NAMES[notesData[id]?.part] || notesData[id]?.part || id;
+const trackLabel = (id) => (notesData[id] ? partName(notesData[id].part) : id);
 const isShown = (id) => !(nPrefs.hidden[song.dir] || []).includes(id);
 function renderNotesBar() {
   const done = doneTracks();
@@ -1708,17 +1786,32 @@ function renderNotesBar() {
   }));
   const busy = Object.entries(notesData).filter(([, e]) => e.status === "queued" || e.status === "running");
   const err = Object.entries(notesData).filter(([, e]) => e.status === "error");
-  $("nStat").textContent = busy.length ? `MIDI を作成中: ${busy.map(([id, e]) => trackLabel(id) + (e.status === "queued" ? "（待ち）" : "…")).join("、")}`
-    : err.length ? `失敗: ${err.map(([id, e]) => `${trackLabel(id)}（${e.message}）`).join("、")}`
-    : done.length ? "" : "まだ MIDI がありません。「MIDI を作る」でパートを選んでください（1パート数秒）。";
+  const st = $("nStat");
+  if (busy.length) {
+    // one progress bar per part being made (the bar elements are reused so the width animates)
+    const rows = busy.map(([id, e]) => {
+      let r = st.querySelector(`[data-id="${CSS.escape(id)}"]`);
+      if (!r) {
+        r = document.createElement("div"); r.className = "nprog"; r.dataset.id = id;
+        r.innerHTML = '<span class="nl"></span><div class="pbar"><i></i></div><span class="np"></span>';
+      }
+      const pct = Math.round((e.progress || 0) * 100);
+      r.querySelector(".nl").textContent = trackLabel(id);
+      r.querySelector("i").style.width = `${e.status === "queued" ? 0 : pct}%`;
+      r.querySelector(".np").textContent = e.status === "queued" ? "待ち" : `${pct}%`;
+      return r;
+    });
+    st.replaceChildren(...rows);
+  } else {
+    st.textContent = err.length ? `失敗: ${err.map(([id, e]) => `${trackLabel(id)}（${e.message}）`).join("、")}`
+      : done.length ? "" : "まだ MIDI がありません。「MIDI を作る」でパートを選んでください（1パート数秒）。";
+  }
   $("nSave").disabled = !done.length;
   dirty = true;
 }
 function makePop() {
   const pitched = Object.entries(notesData);
-  // default: the keyboard-like parts and the chorus, but not "upper" / "original" (they overlap everything)
-  const def = (e) => e.status !== "done" && !["upper", "original", "other", "instrumental", "music"].includes(e.part)
-    && ["keys", "pad", "strings", "chorus"].includes(KIND[e.part]);
+  const def = () => false;      // nothing checked: the user picks the parts
   openPop($("nMake"), `<h3>MIDI を作るパート</h3>
     <div style="max-height:46vh;overflow:auto">${pitched.map(([id, e]) => `<label class="row" style="margin:6px 0"><input type="checkbox" value="${esc(id)}" ${def(e) ? "checked" : ""}>
       <span style="flex:1">${esc(trackLabel(id))} <span style="color:var(--muted);font-size:12px">${e.group === "mix" ? "" : "（重ねる用）"}</span></span>
@@ -1742,9 +1835,14 @@ function makePop() {
 function optsPop() {
   openPop($("nOpts"), `<h3>ノーツの表示</h3>
     ${rangeRow("見える長さ", "oWin", 1, 8, 0.5, nPrefs.win, (v) => `${v} 秒`)}
+    <div class="row" style="align-items:flex-start"><label style="padding-top:10px">ノーツの長さ</label><div class="btns">${[["next", "打鍵ごとに区切る"], ["same", "同じ音だけ区切る"], ["full", "実際の長さ"]].map(([v, l]) => `<button class="btn ${nPrefs.len === v ? "on" : ""}" data-len="${v}">${l}</button>`).join("")}</div></div>
     <div class="row"><label>クオンタイズ</label><div class="btns">${[[0, "オフ"], [2, "8分"], [4, "16分"]].map(([v, l]) => `<button class="btn ${nPrefs.quant === v ? "on" : ""}" data-q="${v}">${l}</button>`).join("")}</div></div>
-    <p class="sub">クオンタイズは検出した拍に合わせてノーツの位置をそろえる（表示と MIDI 保存に反映。元のデータは変わらない）。キーを移調しているとノーツも移調して表示する。</p>`, (pop) => {
+    <p class="sub">「打鍵ごとに区切る」は、同じパートの次の打鍵の少し手前でノーツを切る（押すタイミングが見やすい。伸ばしている音も次の打鍵で切れる）。クオンタイズは検出した拍に合わせて位置をそろえる。どちらも表示と MIDI 保存に反映し、元のデータは変わらない。キーを移調しているとノーツも移調して表示する。</p>`, (pop) => {
     bindRange(pop, "oWin", (v) => `${v} 秒`, (v) => { nPrefs.win = v; saveNPrefs(); dirty = true; });
+    pop.querySelectorAll("[data-len]").forEach((b) => { b.onclick = () => {
+      nPrefs.len = b.dataset.len; saveNPrefs(); notesPrepared = {}; dirty = true;
+      pop.querySelectorAll("[data-len]").forEach((x) => x.classList.toggle("on", x === b));
+    }; });
     pop.querySelectorAll("[data-q]").forEach((b) => { b.onclick = () => {
       nPrefs.quant = +b.dataset.q; saveNPrefs(); notesPrepared = {}; dirty = true;
       pop.querySelectorAll("[data-q]").forEach((x) => x.classList.toggle("on", x === b));
@@ -1778,9 +1876,33 @@ function prepared(id) {
       return [posToSec(a), posToSec(b), p, v];
     });
   }
-  ns = ns.slice().sort((x, y) => x[0] - y[0]);
+  ns = ns.slice().sort((x, y) => x[0] - y[0]).map((n) => n.slice());
+  if (nPrefs.len !== "full") ns = shortenNotes(ns, nPrefs.len === "next");
   const maxDur = ns.reduce((m, n) => Math.max(m, n[1] - n[0]), 0);
   return (notesPrepared[id] = { ns, starts: ns.map((n) => n[0]), maxDur });
+}
+// Cut notes so every key press is visible: before the next press of the same key ("same"), or before
+// the part's next onset of any key ("next"; notes starting within 70 ms count as one chord — a rolled chord
+// is one press to the eye, and the minimum note length must not reach into the next press).
+// A small gap is left so consecutive notes never touch; very short notes keep a minimum length.
+function shortenNotes(ns, anyKey) {
+  const GROUP = 0.07;
+  const onsets = [];
+  for (const n of ns) if (!onsets.length || n[0] - onsets[onsets.length - 1] > GROUP) onsets.push(n[0]);
+  const nextSame = {};
+  for (let i = ns.length - 1; i >= 0; i--) {
+    const n = ns[i], p = n[2];
+    let end = n[1];
+    if (nextSame[p] !== undefined) end = Math.min(end, nextSame[p]);
+    if (anyKey) {
+      const j = lowerBound(onsets, n[0] + GROUP);
+      if (j < onsets.length) end = Math.min(end, onsets[j]);
+    }
+    if (end < n[1]) end -= Math.min(0.045, 0.2 * (end - n[0]));        // gap before the next press
+    n[1] = Math.max(n[0] + 0.05, end);
+    nextSame[p] = n[0];
+  }
+  return ns;
 }
 const isBlack = (p) => [1, 3, 6, 8, 10].includes(((p % 12) + 12) % 12);
 function keyLayout(lo, hi, w) {
@@ -1831,10 +1953,16 @@ function drawNotes(now) {
       const x = L.x[p] + L.wd[p] * 0.08, ww = L.wd[p] * 0.84;
       const top = Math.max(0, yt), bot = Math.min(y0, yb);
       if (bot <= top) continue;
-      g.globalAlpha = 0.55 + 0.45 * (v / 127);
+      const hh = Math.max(3 * dpr, bot - top);
+      g.globalAlpha = 0.6 + 0.4 * (v / 127);
       g.fillStyle = col;
-      roundRect(g, x, top, ww, Math.max(2 * dpr, bot - top), Math.min(5 * dpr, ww / 3)); g.fill();
+      roundRect(g, x, top, ww, hh, Math.min(5 * dpr, ww / 3)); g.fill();
       g.globalAlpha = 1;
+      g.strokeStyle = "rgba(0,0,0,.55)"; g.lineWidth = 1 * dpr; g.stroke();
+      if (yb <= y0 + 1 && yb >= top) {          // the press: a light band at the bottom edge of the note
+        g.fillStyle = "rgba(255,255,255,.55)";
+        g.fillRect(x + 1 * dpr, Math.max(top, yb - 3 * dpr), ww - 2 * dpr, 2 * dpr);
+      }
       if (s <= now && e > now) active[p] = col;
     }
   }
