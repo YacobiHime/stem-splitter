@@ -46,3 +46,26 @@
   --model "$PWD/models/custom/gilliaan/gilliaan_bsroformer_bowedstrings_v2.ckpt" \
   --config "$PWD/models/custom/gilliaan/gilliaan_bsroformer_bowedstrings_v2.yaml"
 ```
+
+## ミキサーの解析用（拍・小節・コード）
+
+`mixer/analysis.py` が使う。どちらも無ければ librosa だけの方法（精度は低い）に自動で戻る。
+
+| 役割 | 入手方法 | オリジナル出典 | ライセンス表記 | sha256 |
+|---|---|---|---|---|
+| コード認識（170種） | `git clone https://github.com/jayg996/BTC-ISMIR19 vendor/BTC-ISMIR19`（commit `2682317`）。重みはリポジトリ同梱の `test/btc_model_large_voca.pt` | https://github.com/jayg996/BTC-ISMIR19 （Park et al., ISMIR 2019） | MIT | `1673d23f8f9a55ae7f9e8b80a51da616debb22675b8d8b67ea6ce0ef37b0ab51` |
+| 拍・小節頭・拍子 | `VIRTUAL_ENV=.venv uv pip install git+https://github.com/CPJKU/beat_this.git`（1.1.0）。重みは初回に `~/.cache/torch/hub/checkpoints/beat_this-final0.ckpt` へ自動ダウンロード | https://github.com/CPJKU/beat_this （Foscarin et al., ISMIR 2024） | MIT（コードと重み） | `8c328b45f59d8dd3dff219253ff6a8d6482be57d0133a29140e2febbf8eb8331` |
+
+## ミキサーの「分離の設定」（カスタム分離など）で使うもの
+
+初めて使うときに pymss カタログ（HuggingFace ミラー）から自動ダウンロードされる。オリジナル配布元とライセンス表記は未確認。
+
+| 役割 | pymss 名 | sha256 |
+|---|---|---|
+| ドラムの分解（キック/スネア/タム/ハイハット/ライド/クラッシュ） | `MDX23C-DrumSep-aufr33-jarredou.ckpt` | `d2a4aa53eb584d21eead358a4e66d1882ad182911be018f052b5da73be9096d0` |
+| アコギ（エレキ = ギター − アコギ） | `bs_mega_53stem_acoustic-guitar_mvsep.ckpt` | `fa386b2e7b1ea4f12b9b5c557444c0dc78648ef4ee299de2759d86457e182b3e` |
+| 木管 | `bs_mega_53stem_woodwind_mvsep.ckpt` | `9a1335d2cd21cd4fdd6964e7ab96c9e9776b2643644f763e2f59bb6c53d39060` |
+| 金管 | `bs_mega_53stem_brass_mvsep.ckpt` | `e7d7bf86a031f3253019ff9dc424485d8085946fc428ab66522c568ee17b8027` |
+| 会話 / サウンドトラック / 効果音 | `model_bandit_plus_dnr_sdr_11.47.ckpt` | `c48284779f7d1258a6527d3aaa18a532d45c1f506e2dcc25d5ab179a8c5e2573` |
+
+ほかに、既存の Resurrection / karaoke / BS-Roformer-SW / gilliaan strings / Mega53 の synth・organ・keys を組み合わせて使う。

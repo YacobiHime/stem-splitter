@@ -21,3 +21,9 @@ vendor/
 __pycache__/
 *.pyc
 *.tmp
+
+# ミキサー: アクセストークン・m4a のデコードキャッシュ
+.mixer_token
+.mixer_cache/
+mixer.log
+.mixer_jobs.json
