@@ -102,6 +102,24 @@ def loudest_window_dbfs(audio, sample_rate, window_s=1.0):
     return 20 * np.log10(w) if w > 0 else -np.inf
 
 
+def window_rms(audio, sample_rate, window_s=0.5):
+    """RMS of each window (mono mix of the channels)."""
+    n = int(sample_rate * window_s)
+    usable = audio.shape[0] // n * n
+    x = audio[:usable].astype(np.float64).reshape(-1, n, audio.shape[1])
+    return np.sqrt(np.mean(x ** 2, axis=(1, 2)))
+
+
+def active_share(part, ref, sample_rate, level_db, loud_db=-30.0):
+    """Percent of the loud windows of ref (within loud_db of its loudest) in which part is within
+    level_db of ref, i.e. clearly audible in it."""
+    p, r = window_rms(part, sample_rate), window_rms(ref, sample_rate)
+    if not r.size or r.max() <= 0:
+        return 0.0
+    loud = r > r.max() * 10 ** (loud_db / 20)
+    return float(np.mean(p[loud] > r[loud] * 10 ** (level_db / 20)) * 100)
+
+
 def stats(audio):
     peak = float(np.max(np.abs(audio))) if audio.size else 0.0
     rms = float(np.sqrt(np.mean(np.square(audio, dtype=np.float64)))) if audio.size else 0.0

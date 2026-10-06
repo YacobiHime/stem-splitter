@@ -438,6 +438,69 @@ def drop_silent(song, cfg, tracks, ref_db, label, keep=(), threshold=None):
     return dropped
 
 
+def detect_parts(song, cfg, parts, tracks, orig):
+    """mixer.detect (the "auto" separation): keep only the parts that are playing. Changes parts
+    ({part: [work names]}) and tracks ({part: audio}) in place, keeping their sum; returns a report for
+    the manifest. See mixer/profiles.py AUTO_DETECT for the settings."""
+    det = (cfg.get("mixer") or {}).get("detect") or {}
+    sr = cfg["sample_rate"]
+    thr, level = det.get("threshold_pct", 5.0), det.get("level_db", -15.0)
+    share = {k: round(audio.active_share(a, orig, sr, level), 1) for k, a in tracks.items()}
+    report = {"threshold_pct": thr, "level_db": level, "share_pct": share, "absent": {}, "split": {}, "parents": {}}
+
+    def replace(old, new_items):                       # keep the order: new items go where old was
+        items = list(parts.items())
+        i = [k for k, _ in items].index(old)
+        parts.clear()
+        parts.update(items[:i] + new_items + items[i + 1:])
+
+    for ch in det.get("choose", []):
+        part = ch["part"]
+        if part not in tracks or share[part] < thr:
+            continue
+        best = None
+        for opt in ch["options"]:
+            pieces, _ = assemble(song, opt, tracks[part].shape[0], sr, "detect")
+            if len(pieces) != len(opt):
+                continue
+            pct = {k: round(audio.active_share(a, tracks[part], sr, ch.get("piece_level_db", -6.0)), 1)
+                   for k, a in pieces.items()}
+            song.log(f"detect: {part} split into " + ", ".join(f"{k} {v}%" for k, v in pct.items()))
+            if min(pct.values()) >= ch.get("piece_pct", 20.0) and (best is None or min(pct.values()) > best[0]):
+                best = (min(pct.values()), opt, pieces, pct)
+        if best is None:
+            continue
+        _, opt, pieces, pct = best
+        # the louder piece also gets what neither took (part - the other pieces): still adds up to the part
+        loud = max(pieces, key=lambda k: float(np.mean(np.square(pieces[k]))))
+        srcs = {k: list(v) for k, v in opt.items()}
+        srcs[loud] = list(parts[part]) + [("-" + w) for k, v in opt.items() if k != loud for w in v]
+        pieces[loud] = tracks[part] - sum(a for k, a in pieces.items() if k != loud)
+        replace(part, list(srcs.items()))
+        del tracks[part]
+        tracks.update(pieces)
+        report["split"][part] = pct
+        report["parents"].update({k: part for k in pieces})
+        song.log(f"detect: {part} -> " + ", ".join(pieces))
+
+    for rule in det.get("absent", []):
+        part, into = rule[0], rule[1]
+        if part not in tracks or into not in tracks or share.get(part, 100.0) >= thr:
+            continue
+        parts[into] = parts[into] + parts.pop(part)
+        tracks[into] = tracks[into] + tracks.pop(part)
+        report["absent"][part] = share[part]
+        if len(rule) > 2 and rule[2] not in parts:
+            replace(into, [(rule[2], parts[into])])
+            tracks[rule[2]] = tracks.pop(into)
+            share[rule[2]] = share.get(into, 0.0)
+            report["absent"][part] = f"{share[part]} -> {rule[2]}"
+    playing = ", ".join(f"{k} ({share[k]}%)" if k in share else k for k in parts)
+    absent = ", ".join(f"{k} ({v}%)" for k, v in report["absent"].items())
+    song.log(f"detect: playing {playing}" + (f"; absent, added back: {absent}" if absent else ""))
+    return report
+
+
 def source_expr(srcs):
     return " ".join(("-" if s.startswith("-") else "+") + f"work/{s.lstrip('-')}.wav" for s in srcs).lstrip("+")
 
@@ -446,20 +509,29 @@ def build_deliverables(song, cfg, models, steps):
     sr = cfg["sample_rate"]
     orig, _ = audio.read(song.wav("original"))
     frames = orig.shape[0]
-    parts = song_deliverables(song, cfg)
-    tracks, exact = assemble(song, parts, frames, sr, "deliverables")
     ref_db = audio.loudest_window_dbfs(orig, sr)
-    dropped = drop_silent(song, cfg, tracks, ref_db, "deliverables",
-                          keep=set((cfg.get("drop_silent") or {}).get("keep_always", [])))
-    exact &= set(tracks)
 
     # Mixer tracks (output/<song>/mix/): a set of parts that do not overlap, so that
     # playing all of them at 0 dB gives back the original.
     mix_cfg = cfg.get("mixer") or {}
-    mix_parts, mix_tracks, mix_dropped = {}, {}, {}
+    mix_parts, mix_tracks, mix_dropped, detection = {}, {}, {}, None
+    parents = dict(mix_cfg.get("parents") or {})
     if mix_cfg.get("enabled", False):
         mix_parts = {k: list(v) if isinstance(v, list) else [v] for k, v in (mix_cfg.get("tracks") or {}).items()}
         mix_tracks, _ = assemble(song, mix_parts, frames, sr, "mix")
+        if mix_cfg.get("detect"):
+            detection = detect_parts(song, cfg, mix_parts, mix_tracks, orig)
+            parents.update(detection.pop("parents"))
+
+    parts = song_deliverables(song, cfg)
+    if detection is not None:              # the Audacity files follow what was detected
+        parts = {"original": parts.get("original", ["original"]), **mix_parts}
+    tracks, exact = assemble(song, parts, frames, sr, "deliverables")
+    dropped = drop_silent(song, cfg, tracks, ref_db, "deliverables",
+                          keep=set((cfg.get("drop_silent") or {}).get("keep_always", [])))
+    exact &= set(tracks)
+
+    if mix_cfg.get("enabled", False):
         if len(mix_tracks) == len(mix_parts):
             resid = orig - sum(mix_tracks.values())
             song.log(f"mix: sum of {len(mix_tracks)} tracks vs original: residual peak {audio.stats(resid)['peak_dbfs']} dBFS")
@@ -536,7 +608,7 @@ def build_deliverables(song, cfg, models, steps):
         dst.parent.mkdir(exist_ok=True)
         mix_files[mix_names[out_name]] = {"part": out_name, "source": source_expr(mix_parts[out_name]),
                                           **save(dst, a, f"{song.name}_mix_{out_name}")}
-        parent = (mix_cfg.get("parents") or {}).get(out_name)
+        parent = parents.get(out_name)
         if parent:
             mix_files[mix_names[out_name]]["parent"] = parent      # split from this part (mixer "さらに分離")
 
@@ -563,6 +635,7 @@ def build_deliverables(song, cfg, models, steps):
         "mix_files": mix_files,
         "mix_dropped_silent": mix_dropped,
         "profile": cfg.get("profile"),             # separation settings chosen in the mixer (None = config.yaml)
+        "detection": detection,                    # "auto" separation: which parts were found (see detect_parts)
     }
     (song.dir / "manifest.json").write_text(json.dumps(manifest, ensure_ascii=False, indent=2))
     total = sum(s.get("time_s", 0) + s.get("load_s", 0) for s in song.state["steps"].values())

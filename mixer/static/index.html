@@ -1544,7 +1544,7 @@ function renderLibrary() {
 function songMenu(s, anchor) {
   openPop(anchor, `<h3>${esc(s.title)}</h3>
     <div class="btns"><button class="btn" id="smOpen">開く</button><button class="btn" id="smRe">分離し直す</button><button class="btn" id="smDel">削除</button></div>
-    <p class="sub">分離: ${({ standard: "耳コピ用", "4stem": "4トラック", "2stem": "2トラック", custom: "カスタム", dnr: "会話/音楽/効果音" })[(s.profile || {}).mode || "standard"]}${(s.profile || {}).hifi ? "（HI-FI）" : ""}・${s.meter ? `拍子 ${s.meter}・` : ""}パート ${s.tracks.filter((t) => t.group === "mix").length} + ${s.tracks.filter((t) => t.group === "extra").length}。削除すると分離結果を output/.trash/ に移す（元に戻せる）。元の音声ファイルは残る。</p>`, (pop) => {
+    <p class="sub">分離: ${({ auto: "自動検出", standard: "耳コピ用", "4stem": "4トラック", "2stem": "2トラック", custom: "カスタム", dnr: "会話/音楽/効果音" })[(s.profile || {}).mode || "standard"]}${(s.profile || {}).hifi ? "（HI-FI）" : ""}${(s.absent || []).length ? `（見つからなかった: ${s.absent.map(partName).join("・")}）` : ""}・${s.meter ? `拍子 ${s.meter}・` : ""}パート ${s.tracks.filter((t) => t.group === "mix").length} + ${s.tracks.filter((t) => t.group === "extra").length}。削除すると分離結果を output/.trash/ に移す（元に戻せる）。元の音声ファイルは残る。</p>`, (pop) => {
     pop.querySelector("#smOpen").onclick = () => { closePop(); showPlayer(s.dir); };
     pop.querySelector("#smRe").onclick = () => {
       closePop();
@@ -1621,6 +1621,7 @@ $("miniFwd").onclick = () => $("bFwd").click();
 
 /* ================================================================ separation settings */
 const SEP_BASIC = [
+  { mode: "auto", label: "自動検出（おすすめ）", sub: "鳴っている楽器を判定して、その分だけトラックにする（ボーカル・コーラス・ドラム・ベース・ギター・ピアノ・弦・シンセなど。コーラスは2声なら2つに）" },
   { mode: "standard", label: "耳コピ用（標準）", sub: "リード・コーラス・ドラム・ベース・ギター・キーボード ＋ ピアノ・弦・シンセなどの個別パート" },
   { mode: "4stem", label: "ボーカル、ドラム、ベース、その他", sub: "4トラック" },
   { mode: "2stem", label: "ボーカル、インストゥルメンタル", sub: "2トラック" },
@@ -1640,6 +1641,7 @@ const SEP_PARTS = [   // key, label, icon, split option label (null = on/off onl
 ];
 const SPLITTABLE = ["vocals", "drums", "guitar"];
 const SEED = {   // custom selection to start from when switching from a preset
+  auto: { vocals: "split", drums: "one", bass: true, guitar: "one", piano: true, keys: true, synth: true, organ: true, strings: true, woodwind: true, brass: true },
   standard: { vocals: "split", drums: "one", bass: true, guitar: "one", piano: true, keys: true, synth: true, strings: true },
   "4stem": { vocals: "one", drums: "one", bass: true },
   "2stem": { vocals: "one" },
@@ -1648,6 +1650,7 @@ const SEED = {   // custom selection to start from when switching from a preset
 let sepState = null, sepOpen = {}, sepSend = null;
 function sepTracks(p) {   // [model runs, tracks] like mixer/profiles.py
   if (p.mode === "standard") return [10, null];
+  if (p.mode === "auto") return [11, null];
   if (p.mode === "dnr") return [1, 3];
   if (p.mode === "2stem") return [1, 2];
   if (p.mode === "4stem") return [2, 4];
@@ -1663,9 +1666,9 @@ function sepTracks(p) {   // [model runs, tracks] like mixer/profiles.py
   return [runs, n + 1];   // + "other"
 }
 function openSeparation(title, init, onSend) {
-  const last = store.get("sepProfile", { mode: "standard", parts: {}, hifi: false });
+  const last = store.get("sepProfile", { mode: "auto", parts: {}, hifi: false });
   const p = init || last;
-  sepState = { mode: p.mode || "standard", parts: { ...(p.parts || {}) }, hifi: !!p.hifi, refine: { ...(p.refine || {}) } };
+  sepState = { mode: p.mode || "auto", parts: { ...(p.parts || {}) }, hifi: !!p.hifi, refine: { ...(p.refine || {}) } };
   sepOpen = {}; sepSend = onSend;
   $("sepTitle").textContent = title;
   $("sepHifi").checked = sepState.hifi;
@@ -1701,7 +1704,7 @@ function renderSeparation() {
   $("sepBody").innerHTML = body.join("");
   const [runs, n] = sepTracks(st);
   const sec = (runs * 8 + 12) * (st.hifi ? 3 : 1);   // a 4-5 minute song
-  $("sepSum").textContent = `${n ? n + "トラック" : "6トラック ＋ 個別パート"}・4〜5分の曲で約${sec < 90 ? Math.round(sec / 10) * 10 + "秒" : Math.round(sec / 60) + "分"}`;
+  $("sepSum").textContent = `${n ? n + "トラック" : st.mode === "auto" ? "見つかったパートだけ" : "6トラック ＋ 個別パート"}・4〜5分の曲で約${sec < 90 ? Math.round(sec / 10) * 10 + "秒" : Math.round(sec / 60) + "分"}`;
   const empty = st.mode === "custom" && !Object.values(st.parts).some(Boolean);
   $("sepSend").disabled = empty;
 }
@@ -1751,6 +1754,7 @@ const KIND = { piano: "keys", "digital-piano": "keys", keys: "keys", keyboards: 
   organ: "pad", synth: "pad", strings: "strings", brass: "pad", woodwind: "lead", bass: "bass", guitar: "guitar",
   "acoustic-guitar": "guitar", "electric-guitar": "guitar", lead: "lead", vocals: "lead", chorus: "chorus" };
 const GM_PROGRAM = { keys: 0, pad: 89, strings: 48, bass: 33, guitar: 27, lead: 53, chorus: 52, other: 0 };
+const NOTE_MODELS = { basic: "Basic Pitch", mt3: "YourMT3", piano: "ピアノ専用モデル" };
 let notesData = {}, notesPrepared = {}, notesTimer = 0;
 const nPrefs = Object.assign({ win: 3, quant: 0, hidden: {}, len: "next" }, store.get("notesPrefs", {}));
 const saveNPrefs = () => store.set("notesPrefs", nPrefs);
@@ -1777,7 +1781,7 @@ function renderNotesBar() {
   $("nParts").replaceChildren(...done.map(([id]) => {
     const b = document.createElement("button"); b.className = "npart" + (isShown(id) ? "" : " off");
     b.innerHTML = `<i style="background:${trackColor(id)}"></i><span></span>`; b.querySelector("span").textContent = trackLabel(id);
-    b.title = `${trackLabel(id)}（${notesData[id].notes.length} ノーツ・${notesData[id].model === "piano" ? "ピアノ専用モデル" : "Basic Pitch"}）`;
+    b.title = `${trackLabel(id)}（${notesData[id].notes.length} ノーツ・${NOTE_MODELS[notesData[id].model] || "Basic Pitch"}）`;
     b.onclick = () => {
       const h = new Set(nPrefs.hidden[song.dir] || []); h.has(id) ? h.delete(id) : h.add(id);
       nPrefs.hidden[song.dir] = [...h]; saveNPrefs(); renderNotesBar(); dirty = true;
@@ -1804,7 +1808,7 @@ function renderNotesBar() {
     st.replaceChildren(...rows);
   } else {
     st.textContent = err.length ? `失敗: ${err.map(([id, e]) => `${trackLabel(id)}（${e.message}）`).join("、")}`
-      : done.length ? "" : "まだ MIDI がありません。「MIDI を作る」でパートを選んでください（1パート数秒）。";
+      : done.length ? "" : "まだ MIDI がありません。「MIDI を作る」でパートを選んでください（1パート数秒〜30秒ほど）。";
   }
   $("nSave").disabled = !done.length;
   dirty = true;
@@ -1816,10 +1820,10 @@ function makePop() {
     <div style="max-height:46vh;overflow:auto">${pitched.map(([id, e]) => `<label class="row" style="margin:6px 0"><input type="checkbox" value="${esc(id)}" ${def(e) ? "checked" : ""}>
       <span style="flex:1">${esc(trackLabel(id))} <span style="color:var(--muted);font-size:12px">${e.group === "mix" ? "" : "（重ねる用）"}</span></span>
       <span class="sub" style="margin:0">${{ done: "作成済み", queued: "待ち", running: "作成中", error: "失敗" }[e.status] || ""}</span></label>`).join("")}</div>
-    <div class="row"><label>モデル</label><div class="btns"><button class="btn on" data-m="basic">標準（Basic Pitch）</button><button class="btn" data-m="piano">ピアノ専用</button></div></div>
-    <p class="sub">標準はどの楽器にも使える。ピアノ専用はピアノのパート向け（打鍵の強さまで取れるが、分離した音では標準より良いとは限らない）。作成済みのパートを選ぶと作り直す。</p>
+    <div class="row" style="align-items:flex-start"><label style="padding-top:10px">モデル</label><div class="btns"><button class="btn on" data-m="auto">自動</button><button class="btn" data-m="basic">標準（Basic Pitch）</button><button class="btn" data-m="mt3">高精度（YourMT3）</button><button class="btn" data-m="piano">ピアノ専用</button></div></div>
+    <p class="sub">自動はストリングスとボーカル・木管を高精度、ほかを標準で作る。高精度はストリングスやボーカルで標準より正確（ストリングスは標準が見つけた長い音も足す）だが、ベースや歪んだギターは取りこぼしが多い。1パート10〜30秒ほど。ピアノ専用はピアノのパート向け（打鍵の強さまで取れるが、分離した音では標準より良いとは限らない）。作成済みのパートを選ぶと作り直す。</p>
     <div class="btns" style="margin-top:8px"><button class="btn pri" id="nGo">作成</button></div>`, (pop) => {
-    let model = "basic";
+    let model = "auto";
     pop.querySelectorAll("[data-m]").forEach((b) => { b.onclick = () => { model = b.dataset.m; pop.querySelectorAll("[data-m]").forEach((x) => x.classList.toggle("on", x === b)); }; });
     pop.querySelector("#nGo").onclick = async () => {
       const ids = [...pop.querySelectorAll("input:checked")].map((i) => i.value);

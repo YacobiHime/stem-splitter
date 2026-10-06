@@ -1,7 +1,7 @@
 """Separation settings chosen when a song is added -> a pipeline config.
 
 profile = {
-  "mode": "standard" | "4stem" | "2stem" | "custom" | "dnr",
+  "mode": "auto" | "standard" | "4stem" | "2stem" | "custom" | "dnr",
   "parts": {                       # custom only
     "vocals": "one" | "split" | null,      split = lead + chorus
     "drums":  "one" | "split" | null,      split = kick / snare / toms / hihat / cymbals (+ rest)
@@ -12,6 +12,10 @@ profile = {
   "refine": {part: method}         # split a mixer part further (any mode), see REFINE
 }
 
+auto = every part is separated (custom with everything on, the chorus also split two ways), then the
+pipeline keeps only the parts that are really playing (mixer.detect, see AUTO_DETECT): an absent part is
+added back to "other" (an absent chorus to the lead, which becomes "vocals"), and the chorus is split
+into two voices when one of the two methods finds two voices that both sing.
 standard = config.yaml as it is (keyboard transcription set). The other modes are cascades:
 every chosen part is taken out of what is left so far, and the rest is "other", so the mixer
 tracks always add up to the original exactly, whatever is chosen.
@@ -36,6 +40,30 @@ CASCADE = [
 ]
 SIX_PARTS = ("drums", "bass", "guitar", "piano")
 TOGGLES = ("bass", "piano", "keys", "synth", "organ", "strings", "woodwind", "brass")
+
+# ---- auto: what the pipeline checks after separating everything (pipeline/run.py detect_parts).
+# A part is playing when, in the loud parts of the song, it is within level_db of the whole song for at
+# least threshold_pct of the time. Measured on FIRE BIRD / 天球のMúsica / 春日影: absent parts 0-1.6 %
+# (synth, organ, digital piano, piano), playing ones 5.5 % (a short chorus) and up, mostly 20-90 %.
+AUTO_PARTS = {"vocals": "split", "drums": "one", "bass": True, "guitar": "one", "piano": True,
+              **{k: True for k in ("keys", "synth", "organ", "strings", "woodwind", "brass")}}
+AUTO_DETECT = {
+    "threshold_pct": 5.0,
+    "level_db": -15.0,
+    # a part split into pieces when every piece is within piece_level_db of the part for piece_pct of the
+    # part's loud time (FIRE BIRD: male/female puts 99 % in one voice, two singers 27 % / 91 %;
+    # 天球のMúsica: both methods about half and half). The best balanced option wins; what neither piece
+    # took stays with the louder piece, so the pieces still add up to the part.
+    "choose": [{"part": "chorus", "piece_level_db": -6.0, "piece_pct": 20.0, "options": [
+        {"chorus-v1": ["auto_chorus_v1"], "chorus-v2": ["auto_chorus_v2"]},
+        {"chorus-s1": ["auto_chorus_s1"], "chorus-s2": ["auto_chorus_s2"]},
+    ]}],
+    # checked in this order: [part, part it is added to when absent, new name of that part (optional)]
+    "absent": [["chorus", "lead", "vocals"], ["lead", "other"], ["vocals", "other"], ["drums", "other"],
+               ["bass", "other"], ["guitar", "other"], ["piano", "other"], ["strings", "other"],
+               ["woodwind", "other"], ["brass", "other"], ["organ", "other"], ["synth", "other"],
+               ["keyboards", "other"]],
+}
 
 # ---- splitting one mixer part further ("refine"). Every method keeps the sum exact: what the
 # models leave is the "<part>-rest" track (dropped when empty).
@@ -70,7 +98,7 @@ def refine_methods(part):
 def normalize(profile):
     p = dict(profile or {})
     mode = p.get("mode", "standard")
-    if mode not in ("standard", "4stem", "2stem", "custom", "dnr"):
+    if mode not in ("auto", "standard", "4stem", "2stem", "custom", "dnr"):
         raise ValueError(f"unknown separation mode: {mode}")
     parts = {}
     if mode == "custom":
@@ -111,6 +139,8 @@ def build_steps(p):
         return steps, {"vocals": ["vocals"], "instrumental": ["instrumental"]}
     if mode == "4stem":
         parts = {"vocals": "one", "drums": "one", "bass": True}
+    if mode == "auto":
+        parts = AUTO_PARTS
 
     vocals = parts.get("vocals")
     if vocals == "split":
@@ -158,6 +188,12 @@ def build_steps(p):
         rest = f"rest_{part}"
 
     tracks["other"] = [rest] + (["vocals"] if not vocals else [])
+    if mode == "auto" and "chorus" not in p["refine"]:
+        # both ways of splitting the chorus; detect_parts keeps one of them (or neither)
+        steps.append({"name": "auto_chorus_voice2", "model": GENDER, "input": "backing",
+                      "outputs": {"male": "auto_chorus_v1", "female": "auto_chorus_v2"}})
+        steps.append({"name": "auto_chorus_duet", "model": DUET, "input": "backing",
+                      "outputs": {"singer_1": "auto_chorus_s1", "singer_2": "auto_chorus_s2"}})
     return steps, tracks
 
 
@@ -227,7 +263,12 @@ def build_config(base, profile):
         cfg["steps"] = steps
         cfg["mixer"] = {"enabled": True, "tracks": tracks, "parents": parents,
                         "drop_threshold_db": (base.get("mixer") or {}).get("drop_threshold_db", -50.0)}
-        # Audacity files: the original + the same parts as the mixer
+        if p["mode"] == "auto":
+            det = copy.deepcopy(AUTO_DETECT)
+            if "chorus" in p["refine"]:                # split by hand instead
+                det["choose"] = []
+            cfg["mixer"]["detect"] = det
+        # Audacity files: the original + the same parts as the mixer (after detection, for auto)
         cfg["deliverables"] = {"original": "original", **tracks}
         cfg["drop_silent"] = {**(cfg.get("drop_silent") or {}), "keep_always": ["original"]}
         cfg["song_overrides"] = {}

@@ -166,7 +166,8 @@ class Library:
         return {"name": m["song"], "dir": d.name, "frames": m["format"]["frames"],
                 "sample_rate": m["format"]["sample_rate"], "tracks": mix + extra,
                 "title": meta["title"], "artist": meta["artist"], "cover": meta["cover"],
-                "added": m.get("generated"), "profile": m.get("profile"), **self.summary(d)}
+                "added": m.get("generated"), "profile": m.get("profile"),
+                "absent": list((m.get("detection") or {}).get("absent") or {}), **self.summary(d)}
 
     def summary(self, d):
         """BPM / key / main meter for the song list, from the cached analysis (if it is there yet)."""
@@ -232,8 +233,8 @@ class Library:
         d, m = self.manifest(song)
         if not m:
             raise LookupError("no such song")
-        if model not in ("basic", "piano"):
-            raise ValueError("model must be basic or piano")
+        if model not in transcribe.MODELS:
+            raise ValueError("model must be one of " + ", ".join(transcribe.MODELS))
         known = {**m["mix_files"], **m.get("files", {})}
         for t in tracks:
             if t not in known:
@@ -257,7 +258,7 @@ class Library:
                 src = d / track
                 t = time.time()
                 st = self.tr_status[(song, track)]
-                notes, raw = transcribe.transcribe(src, part, model, lambda f, st=st: st.__setitem__("progress", round(f, 3)))
+                notes, raw, model = transcribe.transcribe(src, part, model, lambda f, st=st: st.__setitem__("progress", round(f, 3)))
                 f = self.notes_path(d, track)
                 f.parent.mkdir(exist_ok=True)
                 f.write_text(json.dumps({"version": transcribe.VERSION, "stamp": src.stat().st_mtime, "model": model,
@@ -554,7 +555,7 @@ class Handler(BaseHTTPRequestHandler):
                 self.jobs.dismiss(q.get("id", ""))
                 return self.send(HTTPStatus.OK, "{}", "application/json")
             if url.path == "/api/transcribe":
-                self.lib.queue_transcription(q.get("song", ""), json.loads(q.get("tracks", "[]")), q.get("model", "basic"))
+                self.lib.queue_transcription(q.get("song", ""), json.loads(q.get("tracks", "[]")), q.get("model", "auto"))
                 return self.send(HTTPStatus.OK, "{}", "application/json")
             if url.path == "/api/reseparate":
                 d, m = self.lib.manifest(q.get("song", ""))
