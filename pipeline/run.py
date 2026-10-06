@@ -129,7 +129,7 @@ class ModelCache:
             "sha256": self.sha256(info["model_path"]),
         }
 
-    def load(self, name, inference_params=None):
+    def load(self, name, inference_params=None, use_tta=False):
         from pymss import MSSeparator
 
         self.resolve(name)
@@ -140,7 +140,7 @@ class ModelCache:
         params.update(inference_params or {})
         return MSSeparator.from_model_name(
             name, model_dir=self.model_dir, download=False, device=self.device,
-            logger=quiet, inference_params=params,
+            logger=quiet, inference_params=params, use_tta=use_tta,
         )
 
 
@@ -206,7 +206,10 @@ def step_model(step, songs, cfg, models, vram, force):
     name, model = step["name"], step["model"]
     inp, outputs = step["input"], step["outputs"]
     params = step.get("inference_params") or {}
+    tta = bool(step.get("use_tta", cfg.get("use_tta", False)))
     sig = {"model": model, "outputs": outputs, "inference_params": params}
+    if tta:
+        sig["use_tta"] = True          # only when on, so existing results stay valid
 
     todo = []
     for song in songs:
@@ -225,7 +228,7 @@ def step_model(step, songs, cfg, models, vram, force):
     vram.reset()
     t = time.time()
     try:
-        sep = models.load(model, params)
+        sep = models.load(model, params, use_tta=tta)
     except Exception as e:
         for song in todo:
             song.log(f"{name}: FAILED to load model {model}: {e}")
@@ -283,6 +286,33 @@ def step_upper(songs, cfg, force):
         diff = audio.stats(sub - add)
         song.log(f"upper: {time.time() - t:.1f}s method={method}, subtract-sum residual peak {diff['peak_dbfs']} dBFS, rms {diff['rms_dbfs']} dBFS")
         song.record("upper", signature=sig, time_s=round(time.time() - t, 2), residual=diff)
+
+
+def step_combine(step, songs, cfg, force):
+    """Built-in step: work/<output>.wav = sum of work files ("-name" is subtracted).
+    Used for cascades: what is left after taking instruments out."""
+    name, srcs, out = step["name"], step["combine"], step["output"]
+    inputs = [s.lstrip("-") for s in srcs]
+    sig = {"combine": srcs}
+    for song in songs:
+        if song.failed:
+            continue
+        missing = [i for i in inputs if not song.wav(i).exists()]
+        if missing:
+            song.log(f"{name}: skip (missing {missing})")
+            continue
+        if is_fresh(song, name, [out], inputs, sig, force):
+            song.log(f"{name}: skip (exists)")
+            continue
+        t = time.time()
+        frames = audio.read(song.wav(inputs[0]))[0].shape[0]
+        total = None
+        for s in srcs:
+            a = audio.fit_length(audio.read(song.wav(s.lstrip("-")))[0], frames)
+            total = (-a if s.startswith("-") else a) if total is None else (total - a if s.startswith("-") else total + a)
+        audio.write(song.wav(out), total, cfg["sample_rate"])
+        song.log(f"{name}: {time.time() - t:.1f}s {out} = {' '.join(srcs)}")
+        song.record(name, signature=sig, time_s=round(time.time() - t, 2))
 
 
 def step_explore(songs, cfg, models, vram, force):
@@ -359,23 +389,20 @@ def song_deliverables(song, cfg):
     return parts
 
 
-def build_deliverables(song, cfg, models, steps):
-    sr = cfg["sample_rate"]
-    orig, _ = audio.read(song.wav("original"))
-    frames = orig.shape[0]
-    parts = song_deliverables(song, cfg)
+def assemble(song, parts, frames, sr, label):
+    """Sum/subtract work files: {part: [work names]} -> ({part: audio}, {parts that are a single exact work file})."""
     tracks, exact = {}, set()
     for out_name, srcs in parts.items():
         missing = [s.lstrip("-") for s in srcs if not song.wav(s.lstrip("-")).exists()]
         if missing:
-            song.log(f"deliverable {out_name}: missing work/{missing[0]}.wav")
+            song.log(f"{label}: {out_name}: missing work/{missing[0]}.wav")
             continue
         total, ok = None, True
         for s in srcs:
             sign, name = (-1.0, s[1:]) if s.startswith("-") else (1.0, s)
             a, file_sr = audio.read(song.wav(name))
             if file_sr != sr:
-                song.log(f"deliverable {out_name}: unexpected sample rate {file_sr} in {s}")
+                song.log(f"{label}: {out_name}: unexpected sample rate {file_sr} in {s}")
                 ok = False
                 break
             if srcs == [name] and a.shape == (frames, 2):
@@ -387,25 +414,58 @@ def build_deliverables(song, cfg, models, steps):
     merged = {k: v for k, v in parts.items() if len(v) > 1 and k in tracks}
     if merged:
         expr = lambda v: " ".join(("- " + s[1:]) if s.startswith("-") else ("+ " + s) for s in v).lstrip("+ ")
-        song.log("deliverables: combined " + ", ".join(f"{k} = {expr(v)}" for k, v in merged.items()))
+        song.log(f"{label}: combined " + ", ".join(f"{k} = {expr(v)}" for k, v in merged.items()))
+    return tracks, exact
 
-    # Drop tracks where the model found nothing (only faint bleed left).
+
+def drop_silent(song, cfg, tracks, ref_db, label, keep=(), threshold=None):
+    """Remove (in place) tracks where the model found nothing (only faint bleed left); return {part: rel dB}."""
     dropped = {}
     ds = cfg.get("drop_silent") or {}
-    if ds.get("enabled", False):
-        ref_db = audio.loudest_window_dbfs(orig, sr)
-        keep = set(ds.get("keep_always", []))
-        for out_name in list(tracks):
-            if out_name in keep:
-                continue
-            rel = audio.loudest_window_dbfs(tracks[out_name], sr) - ref_db
-            if rel < ds.get("threshold_db", -30.0):
-                dropped[out_name] = round(float(rel), 1)
-                del tracks[out_name]
-                exact.discard(out_name)
-        if dropped:
-            song.log("deliverables: not saved (nothing detected): "
-                     + ", ".join(f"{k} ({v} dB)" for k, v in dropped.items()))
+    if not ds.get("enabled", False):
+        return dropped
+    if threshold is None:
+        threshold = ds.get("threshold_db", -30.0)
+    for out_name in list(tracks):
+        if out_name in keep:
+            continue
+        rel = audio.loudest_window_dbfs(tracks[out_name], cfg["sample_rate"]) - ref_db
+        if rel < threshold:
+            dropped[out_name] = round(float(rel), 1)
+            del tracks[out_name]
+    if dropped:
+        song.log(f"{label}: not saved (nothing detected): " + ", ".join(f"{k} ({v} dB)" for k, v in dropped.items()))
+    return dropped
+
+
+def source_expr(srcs):
+    return " ".join(("-" if s.startswith("-") else "+") + f"work/{s.lstrip('-')}.wav" for s in srcs).lstrip("+")
+
+
+def build_deliverables(song, cfg, models, steps):
+    sr = cfg["sample_rate"]
+    orig, _ = audio.read(song.wav("original"))
+    frames = orig.shape[0]
+    parts = song_deliverables(song, cfg)
+    tracks, exact = assemble(song, parts, frames, sr, "deliverables")
+    ref_db = audio.loudest_window_dbfs(orig, sr)
+    dropped = drop_silent(song, cfg, tracks, ref_db, "deliverables",
+                          keep=set((cfg.get("drop_silent") or {}).get("keep_always", [])))
+    exact &= set(tracks)
+
+    # Mixer tracks (output/<song>/mix/): a set of parts that do not overlap, so that
+    # playing all of them at 0 dB gives back the original.
+    mix_cfg = cfg.get("mixer") or {}
+    mix_parts, mix_tracks, mix_dropped = {}, {}, {}
+    if mix_cfg.get("enabled", False):
+        mix_parts = {k: list(v) if isinstance(v, list) else [v] for k, v in (mix_cfg.get("tracks") or {}).items()}
+        mix_tracks, _ = assemble(song, mix_parts, frames, sr, "mix")
+        if len(mix_tracks) == len(mix_parts):
+            resid = orig - sum(mix_tracks.values())
+            song.log(f"mix: sum of {len(mix_tracks)} tracks vs original: residual peak {audio.stats(resid)['peak_dbfs']} dBFS")
+        # stricter than for the Audacity files: the mixer tracks must still add up to the original,
+        # so only parts that are really empty are left out
+        mix_dropped = drop_silent(song, cfg, mix_tracks, ref_db, "mix", threshold=mix_cfg.get("drop_threshold_db", -50.0))
 
     fmt = cfg.get("output_format") or {}
     codec = fmt.get("codec", "wav")
@@ -415,7 +475,8 @@ def build_deliverables(song, cfg, models, steps):
     # lossy AAC overshoots the input peak slightly, so leave 1 dB of headroom there
     ceiling = 10 ** (-1 / 20) if codec == "aac" else 0.999
 
-    peak = max((float(np.max(np.abs(a))) for a in tracks.values()), default=0.0)
+    # the same gain for deliverables and mix tracks keeps their levels comparable in the mixer
+    peak = max((float(np.max(np.abs(a))) for a in [*tracks.values(), *mix_tracks.values()]), default=0.0)
     gain = 1.0
     if cfg.get("global_gain_on_clip", True) and peak > ceiling:
         gain = ceiling / peak
@@ -437,25 +498,44 @@ def build_deliverables(song, cfg, models, steps):
     old |= {f.name for pat in ("[0-9][0-9]_*.wav", "[0-9][0-9]_*.m4a") for f in song.dir.glob(pat)}
     for name in old - set(names.values()):
         (song.dir / name).unlink(missing_ok=True)
+    mix_dir = song.dir / "mix"
+    # always lossless: with AAC the parts no longer cancel out exactly and their sum is ~-26 dB off the original
+    mix_names = {part: f"mix/{part}.flac" for part in mix_tracks}
+    if mix_dir.exists():
+        for f in mix_dir.iterdir():
+            if f.is_file() and f"mix/{f.name}" not in mix_names.values():
+                f.unlink()
+
+    def save(dst, a, title, link_src=None):
+        if gain != 1.0:
+            a = a * gain
+        if dst.suffix == ".flac":
+            audio.write_flac(dst, a, sr)
+        elif codec != "wav":
+            audio.write_m4a(dst, a, sr, codec=codec, bitrate=fmt.get("bitrate", "256k"),
+                            metadata={"title": title, "album": song.name})
+        elif gain == 1.0 and link_src is not None:
+            # identical content: hardlink (no extra disk) — survives `--clean` of work/
+            tmp = dst.with_name(dst.stem + ".tmp.wav")
+            tmp.unlink(missing_ok=True)
+            os.link(link_src, tmp)
+            os.replace(tmp, dst)
+        else:
+            audio.write(dst, a, sr)
+        return audio.stats(a)
 
     files = {}
     for out_name, a in tracks.items():
         dst = song.dir / names[out_name]
-        srcs = [song.wav(s.lstrip("-")) for s in parts[out_name]]
-        if gain != 1.0:
-            a = a * gain
-        if codec != "wav":
-            audio.write_m4a(dst, a, sr, codec=codec, bitrate=fmt.get("bitrate", "256k"),
-                            metadata={"title": f"{song.name}_{out_name}", "album": song.name})
-        elif gain == 1.0 and out_name in exact:
-            # identical content: hardlink (no extra disk) — survives `--clean` of work/
-            tmp = dst.with_name(dst.stem + ".tmp.wav")
-            tmp.unlink(missing_ok=True)
-            os.link(srcs[0], tmp)
-            os.replace(tmp, dst)
-        else:
-            audio.write(dst, a, sr)
-        files[dst.name] = {"source": " ".join(("-" if s.startswith("-") else "+") + f"work/{s.lstrip('-')}.wav" for s in parts[out_name]).lstrip("+"), **audio.stats(a)}
+        link_src = song.wav(parts[out_name][0]) if out_name in exact else None
+        files[dst.name] = {"part": out_name, "source": source_expr(parts[out_name]),
+                           **save(dst, a, f"{song.name}_{out_name}", link_src)}
+    mix_files = {}
+    for out_name, a in mix_tracks.items():
+        dst = song.dir / mix_names[out_name]
+        dst.parent.mkdir(exist_ok=True)
+        mix_files[mix_names[out_name]] = {"part": out_name, "source": source_expr(mix_parts[out_name]),
+                                          **save(dst, a, f"{song.name}_mix_{out_name}")}
 
     used = {}
     for step in steps:
@@ -477,10 +557,13 @@ def build_deliverables(song, cfg, models, steps):
         "steps": song.state["steps"],
         "files": files,
         "dropped_silent": dropped,
+        "mix_files": mix_files,
+        "mix_dropped_silent": mix_dropped,
+        "profile": cfg.get("profile"),             # separation settings chosen in the mixer (None = config.yaml)
     }
     (song.dir / "manifest.json").write_text(json.dumps(manifest, ensure_ascii=False, indent=2))
     total = sum(s.get("time_s", 0) + s.get("load_s", 0) for s in song.state["steps"].values())
-    song.log(f"deliverables: {len(files)} files written, cumulative step time {total:.1f}s")
+    song.log(f"deliverables: {len(files)} files + {len(mix_files)} mix tracks written, cumulative step time {total:.1f}s")
 
 
 # ---------------------------------------------------------------- main
@@ -537,6 +620,8 @@ def main(argv=None):
     for st in steps:
         if st["name"] == "upper":
             step_upper(songs, cfg, args.force)
+        elif "combine" in st:
+            step_combine(st, songs, cfg, args.force)
         else:
             step_model(st, songs, cfg, models, vram, args.force)
     if args.explore:

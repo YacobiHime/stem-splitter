@@ -39,6 +39,15 @@ def write(path, audio, sample_rate):
     os.replace(tmp, path)
 
 
+def write_flac(path, audio, sample_rate):
+    """Atomically write (frames, channels) float32 as 16bit FLAC (clipped to [-1, 1])."""
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_name(path.stem + ".tmp.flac")
+    sf.write(os.fspath(tmp), np.clip(audio, -1.0, 1.0), sample_rate, subtype="PCM_16", format="FLAC")
+    os.replace(tmp, path)
+
+
 def write_m4a(path, audio, sample_rate, codec="aac", bitrate="256k", metadata=None):
     """Atomically encode (frames, channels) float32 to .m4a (AAC or ALAC) via ffmpeg."""
     path = Path(path)

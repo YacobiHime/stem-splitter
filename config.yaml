@@ -138,6 +138,21 @@ deliverables:
   chorus: back_vocal        # Mega53 back-vocal（karaoke 版は work/backing.wav に残る）
   lead: lead
 
+# ミキサー用トラック（output/<曲名>/mix/ に保存。mixer.sh で聴く）。
+# 書き方は deliverables と同じ。互いに重ならない組にしてあるので、全部 0dB で鳴らすと原曲に一致する
+#   vocals + instrumental = original、lead + backing = vocals（どちらもモデルが残りを引き算で出すため誤差 0）
+# keyboards は upper_method に関係なく instrumental から引き算で作る（sum 方式の upper だと合計が原曲にならないため）
+mixer:
+  enabled: true
+  drop_threshold_db: -50     # 何も入っていないパートだけ保存しない（-30dB だと残りの音を捨てて、合計が原曲とずれる）
+  tracks:
+    lead: lead
+    chorus: backing
+    drums: drums
+    bass: bass
+    guitar: guitar
+    keyboards: [instrumental, -drums, -bass, -guitar]
+
 # 曲ごとの上書き（キーは output/ のフォルダ名＝曲名）
 #   merge: {新しい楽器名: [deliverables の楽器名, ...]}  -> それらを足して1ファイルにする
 song_overrides:

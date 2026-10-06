@@ -4,6 +4,9 @@
 Checks: same length / sample rate / channels across all files (m4a is decoded
 with ffmpeg, so encoder padding/priming would show up as a length mismatch),
 expected codec, no silent file, no clipping (|x| > 1.0 after decoding).
+Mixer tracks (mix/, lossless FLAC) must have exactly manifest format.frames frames
+(AAC files are longer by the encoder padding), and their sum must match
+work/original.wav (times the manifest global_gain) when work/ still exists.
 
 Usage: .venv/bin/python check.py [output/<song> ...]   (default: every song in output/)
 Exit code 0 = all songs OK (warnings allowed), 1 = errors found.
@@ -19,6 +22,7 @@ import soundfile as sf
 
 ROOT = Path(__file__).resolve().parent
 SILENCE_DBFS = -60.0   # peak below this -> silent
+MIX_RESIDUAL_DB = -60.0  # sum of mix/ tracks (16bit FLAC) minus original, relative to the original
 EXPECTED_SR = 44100
 EXPECTED_CH = 2
 
@@ -48,8 +52,12 @@ def load(path):
 
 def check_song(d):
     mf = d / "manifest.json"
+    mix, m = [], {}
     if mf.exists():
-        files = [d / name for name in json.loads(mf.read_text()).get("files", {})]
+        m = json.loads(mf.read_text())
+        files = [d / name for name in m.get("files", {})]
+        mix = [d / name for name in m.get("mix_files", {})]
+        files += mix
     else:
         files = sorted(list(d.glob("*.wav")) + list(d.glob("*.m4a")))
     errors, warnings, rows = [], [], []
@@ -58,10 +66,12 @@ def check_song(d):
         return [f"listed in manifest but missing: {missing}"], [], []
     if not files:
         return [f"no .wav / .m4a files in {d}"], [], []
-    exts = {f.suffix for f in files}
+    exts = {f.suffix for f in files if f not in mix}
     if len(exts) > 1:
         errors.append(f"mixed formats {sorted(exts)} (stale files from an older run?)")
     ref = None
+    mix_frames = (m.get("format") or {}).get("frames")
+    mix_sum = None
     for f in files:
         a, sr, ch, codec = load(f)
         frames = a.shape[0]
@@ -70,24 +80,42 @@ def check_song(d):
         rms = float(np.sqrt(np.mean(np.square(a, dtype=np.float64)))) if a.size else 0.0
         rms_db = 20 * np.log10(rms) if rms > 0 else -np.inf
         sig = (frames, sr, ch)
-        ref = ref or (sig, f.name)
         status = []
+        if f in mix:
+            if mix_frames is not None and frames != mix_frames:
+                status.append(f"frames={frames} != {mix_frames} (manifest)")
+        else:
+            ref = ref or (sig, f.name)
         if sr != EXPECTED_SR:
             status.append(f"sr={sr}")
         if ch != EXPECTED_CH:
             status.append(f"ch={ch}")
         if f.suffix == ".wav" and codec != "FLOAT":
             status.append(f"subtype={codec}")
-        if sig != ref[0]:
+        if f not in mix and sig != ref[0]:
             status.append(f"frames={frames} != {ref[0][0]} ({ref[1]})")
         if peak > 1.0:
             status.append(f"CLIP peak={peak:.4f}")
+        name = f.relative_to(d).as_posix()
         for s in status:
-            errors.append(f"{f.name}: {s}")
+            errors.append(f"{name}: {s}")
         if peak_db < SILENCE_DBFS:
-            warnings.append(f"{f.name}: silent (peak {peak_db:.1f} dBFS)")
-        rows.append((f.name, frames, sr, ch, codec, peak_db, rms_db,
+            warnings.append(f"{name}: silent (peak {peak_db:.1f} dBFS)")
+        if f in mix and not status:
+            mix_sum = a.astype(np.float64) if mix_sum is None else mix_sum + a
+        rows.append((name, frames, sr, ch, codec, peak_db, rms_db,
                      "ERR" if status else ("SILENT" if peak_db < SILENCE_DBFS else "ok")))
+    work_orig = d / "work" / "original.wav"
+    if mix_sum is not None and work_orig.exists():
+        orig = sf.read(str(work_orig), dtype="float64", always_2d=True)[0] * m.get("global_gain", 1.0)
+        n = min(len(orig), len(mix_sum))
+        rms = lambda x: np.sqrt(np.mean(np.square(x)))
+        rel = 20 * np.log10(max(rms(mix_sum[:n] - orig[:n]), 1e-12) / max(rms(orig[:n]), 1e-12))
+        line = f"mix/ sum vs work/original.wav: residual {rel:.1f} dB"
+        if rel > MIX_RESIDUAL_DB:
+            errors.append(f"{line} (> {MIX_RESIDUAL_DB} dB: mix tracks overlap or are missing a part)")
+        else:
+            rows.append((line, None, None, None, None, None, None, "ok"))
     return errors, warnings, rows
 
 
@@ -100,6 +128,9 @@ def main(argv):
         if rows:
             print(f"  {'file':<34}{'frames':>10}{'sr':>7}{'ch':>4}  {'codec':<9}{'peak dB':>9}{'rms dB':>9}  status")
             for r in rows:
+                if r[1] is None:
+                    print(f"  {r[0]:<70}  {r[7]}")
+                    continue
                 print(f"  {r[0]:<34}{r[1]:>10}{r[2]:>7}{r[3]:>4}  {r[4]:<9}{r[5]:>9.1f}{r[6]:>9.1f}  {r[7]}")
         for w in warnings:
             print(f"  WARN  {w}")
