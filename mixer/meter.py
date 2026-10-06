@@ -69,7 +69,8 @@ def regular_pulses(beats, period):
             continue
         k = int(round(g / period))
         if 2 <= k <= 4:
-            out.extend(out[-1] + g * j / k for j in range(1, k))
+            prev = out[-1]          # (not out[-1] inside the loop: the list grows while filling)
+            out.extend(prev + g * j / k for j in range(1, k))
         out.append(b)
     return np.array(out)
 

@@ -22,7 +22,7 @@ import soundfile as sf
 from . import chords as btc
 from . import meter
 
-VERSION = 4
+VERSION = 5
 SR = 22050
 HOP = 512          # chroma frames (23 ms)
 BEAT_HOP = 128     # beat tracking frames (5.8 ms), so the BPM is not quantized to 23 ms steps
