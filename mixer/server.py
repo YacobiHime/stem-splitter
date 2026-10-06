@@ -11,6 +11,9 @@ output/<song>/.mixer_cache/var/<t..._p...>/ (the newest VARIANTS_KEPT per song a
 Beats / chords / key (mixer/analysis.py) and waveform peaks are cached in .mixer_cache/ too,
 and computed in the background at startup.
 
+Notes for the falling-notes view: POST /api/transcribe queues tracks, a worker thread runs
+mixer/transcribe.py, results are cached in output/<song>/notes/<file>.json.
+
 Songs can be added from the page (PUT /api/upload -> inbox/ -> mixer/jobs.py runs the pipeline).
 Deleting a song moves output/<song> to output/.trash/ (nothing is removed for good).
 
@@ -44,6 +47,7 @@ from pipeline import audio
 
 from . import analysis
 from .jobs import Jobs
+from . import transcribe
 
 ROOT = Path(__file__).resolve().parent.parent
 STATIC = Path(__file__).resolve().parent / "static"
@@ -96,6 +100,8 @@ class Library:
         self.locks = {}
         self.locks_guard = threading.Lock()
         self.summaries = {}           # analysis.json path -> (mtime, summary)
+        self.tr_queue, self.tr_status, self.tr_cond = [], {}, threading.Condition()
+        threading.Thread(target=self.transcribe_worker, daemon=True).start()
 
     def manifest(self, song):
         d = self.out_root / song
@@ -187,6 +193,75 @@ class Library:
                if key else None}
         self.summaries[f] = (st, out)
         return out
+
+    # ---- notes (MIDI transcription)
+
+    def notes_path(self, d, track):
+        return d / "notes" / (track.replace("/", "__") + ".json")
+
+    def notes(self, song):
+        """{track id: {status, model, notes?}} for every pitched track of the song."""
+        d, m = self.manifest(song)
+        if not m:
+            raise LookupError("no such song")
+        out = {}
+        mix_parts = {i.get("part") for i in m["mix_files"].values()}
+        for rel, info in {**m["mix_files"], **m.get("files", {})}.items():
+            group = "mix" if rel in m["mix_files"] else "extra"
+            if info.get("part") not in transcribe.PITCHED or not (d / rel).exists():
+                continue
+            if group == "extra" and info.get("part") in mix_parts:      # same as the mixer: no duplicates
+                continue
+            f = self.notes_path(d, rel)
+            st = self.tr_status.get((d.name, rel))
+            entry = {"part": info.get("part"), "group": group, "status": "none"}
+            if f.exists():
+                c = json.loads(f.read_text())
+                if c.get("stamp") == (d / rel).stat().st_mtime and c.get("version") == transcribe.VERSION:
+                    entry.update(status="done", model=c["model"], notes=c["notes"])
+            if st and (st["status"] in ("queued", "running") or (st["status"] == "error" and entry["status"] != "done")):
+                entry.update(status=st["status"], message=st.get("message", ""))
+            out[rel] = entry
+        return out
+
+    def queue_transcription(self, song, tracks, model):
+        d, m = self.manifest(song)
+        if not m:
+            raise LookupError("no such song")
+        if model not in ("basic", "piano"):
+            raise ValueError("model must be basic or piano")
+        known = {**m["mix_files"], **m.get("files", {})}
+        for t in tracks:
+            if t not in known:
+                raise LookupError(f"no such track: {t}")
+        with self.tr_cond:
+            for t in tracks:
+                self.tr_status[(d.name, t)] = {"status": "queued", "model": model}
+                self.tr_queue.append((d.name, t, model))
+            self.tr_cond.notify_all()
+
+    def transcribe_worker(self):
+        while True:
+            with self.tr_cond:
+                while not self.tr_queue:
+                    self.tr_cond.wait()
+                song, track, model = self.tr_queue.pop(0)
+                self.tr_status[(song, track)] = {"status": "running", "model": model}
+            try:
+                d, m = self.manifest(song)
+                part = ({**m["mix_files"], **m.get("files", {})}.get(track) or {}).get("part", "other")
+                src = d / track
+                t = time.time()
+                notes, raw = transcribe.transcribe(src, part, model)
+                f = self.notes_path(d, track)
+                f.parent.mkdir(exist_ok=True)
+                f.write_text(json.dumps({"version": transcribe.VERSION, "stamp": src.stat().st_mtime, "model": model,
+                                         "part": part, "raw_notes": raw, "notes": notes}))
+                self.tr_status.pop((song, track), None)
+                print(f"[{song}] notes {track}: {len(notes)} notes (raw {raw}) in {time.time() - t:.1f}s [{model}]", flush=True)
+            except Exception as e:  # noqa: BLE001 — report on the page, keep the worker alive
+                traceback.print_exc()
+                self.tr_status[(song, track)] = {"status": "error", "message": f"{type(e).__name__}: {e}"}
 
     def delete(self, song):
         """Move output/<song> to output/.trash/<song>-<time> (recoverable)."""
@@ -473,6 +548,9 @@ class Handler(BaseHTTPRequestHandler):
             if url.path == "/api/dismiss":
                 self.jobs.dismiss(q.get("id", ""))
                 return self.send(HTTPStatus.OK, "{}", "application/json")
+            if url.path == "/api/transcribe":
+                self.lib.queue_transcription(q.get("song", ""), json.loads(q.get("tracks", "[]")), q.get("model", "basic"))
+                return self.send(HTTPStatus.OK, "{}", "application/json")
             if url.path == "/api/reseparate":
                 d, m = self.lib.manifest(q.get("song", ""))
                 if not m:
@@ -538,6 +616,9 @@ class Handler(BaseHTTPRequestHandler):
             if url.path == "/api/jobs":
                 return self.send(HTTPStatus.OK, json.dumps(self.jobs.list(), ensure_ascii=False),
                                  "application/json; charset=utf-8", [("Cache-Control", "no-store")])
+            if url.path == "/api/notes":
+                return self.send(HTTPStatus.OK, json.dumps(self.lib.notes(q.get("song", ""))),
+                                 "application/json", [("Cache-Control", "no-store")])
             if url.path == "/api/song":
                 body = json.dumps(self.lib.details(q.get("song", "")), ensure_ascii=False)
                 return self.send(HTTPStatus.OK, body, "application/json; charset=utf-8", [("Cache-Control", "no-cache")])

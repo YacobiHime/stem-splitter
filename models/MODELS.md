@@ -69,3 +69,12 @@
 | 会話 / サウンドトラック / 効果音 | `model_bandit_plus_dnr_sdr_11.47.ckpt` | `c48284779f7d1258a6527d3aaa18a532d45c1f506e2dcc25d5ab179a8c5e2573` |
 
 ほかに、既存の Resurrection / karaoke / BS-Roformer-SW / gilliaan strings / Mega53 の synth・organ・keys を組み合わせて使う。
+
+## ノーツ表示（MIDI 化）
+
+`mixer/transcribe.py` が使う。
+
+| 役割 | 入手方法 | オリジナル出典 | ライセンス表記 |
+|---|---|---|---|
+| MIDI 化（標準・どの楽器も） | `VIRTUAL_ENV=.venv uv pip install --no-deps basic-pitch==0.4.0` と `uv pip install onnxruntime-gpu pretty_midi resampy mir_eval audioread "setuptools<70"`。basic-pitch の依存指定（TensorFlow 2.15 以下）は Python 3.12 用が無いので `--no-deps` で入れ、ONNX 版のモデル（パッケージ同梱の `nmp.onnx`）だけを使う。`resampy` が `pkg_resources` を使うため setuptools は 70 未満 | https://github.com/spotify/basic-pitch （Bittner et al., ICASSP 2022） | Apache-2.0 |
+| MIDI 化（ピアノ専用・任意） | `uv pip install piano_transcription_inference`。重みは初回に `~/piano_transcription_inference_data/` へ自動ダウンロード（約165MB） | https://github.com/qiuqiangkong/piano_transcription_inference （Kong et al., 2021） | Apache-2.0 |

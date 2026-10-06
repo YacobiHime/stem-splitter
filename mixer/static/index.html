@@ -212,6 +212,17 @@ input[type=range]::-moz-range-thumb { width: 18px; height: 18px; border-radius: 
 }
 @media (min-width: 761px) { .lrow .meta { display: none; } }
 
+/* falling notes */
+.notesv { display: flex; flex-direction: column; gap: 8px; }
+.nbar { display: flex; justify-content: space-between; align-items: center; gap: 10px; flex-wrap: wrap; }
+.nparts { display: flex; gap: 6px; flex-wrap: wrap; }
+.npart { display: flex; align-items: center; gap: 6px; height: 34px; padding: 0 12px 0 10px; border-radius: 17px; border: 1px solid var(--line2); font-size: 13.5px; }
+.npart i { width: 12px; height: 12px; border-radius: 3px; }
+.npart.off { opacity: .4; }
+.nstat { color: var(--muted); font-size: 13px; min-height: 1.4em; }
+#nCanvas { width: 100%; height: clamp(300px, calc(100dvh - 380px), 900px); border-radius: 14px; background: #10141a; display: block; }
+@media (max-width: 760px) { #nCanvas { height: clamp(240px, calc(100dvh - 500px), 700px); } .nbar .btn { height: 36px; padding: 0 10px; font-size: 13px; } }
+
 /* separation settings sheet */
 .modal { position: fixed; inset: 0; z-index: 25; background: rgba(0,0,0,.55); display: grid; place-items: center; padding: 20px; }
 .sheet { width: min(980px, 100%); height: min(860px, 100%); background: #1f242c; border: 1px solid var(--line); border-radius: 28px; display: flex; flex-direction: column; overflow: hidden; box-shadow: 0 30px 80px rgba(0,0,0,.6); }
@@ -342,6 +353,18 @@ input[type=range]::-moz-range-thumb { width: 18px; height: 18px; border-radius: 
 
     <section class="tracks" id="vMixer"></section>
     <section id="vChart" hidden></section>
+    <section id="vNotes" class="notesv" hidden>
+      <div class="nbar">
+        <div class="nparts" id="nParts"></div>
+        <div class="grp">
+          <button class="btn" id="nMake">MIDI を作る</button>
+          <button class="btn" id="nOpts">表示</button>
+          <button class="btn" id="nSave">MIDI 保存</button>
+        </div>
+      </div>
+      <div class="nstat" id="nStat"></div>
+      <canvas id="nCanvas" aria-label="ノーツ表示"></canvas>
+    </section>
 
     <div class="chips" id="chips"></div>
 
@@ -364,6 +387,7 @@ input[type=range]::-moz-range-thumb { width: 18px; height: 18px; border-radius: 
           <div class="pill views">
             <button id="bViewMixer" class="on" title="ミキサー" aria-label="ミキサー"></button>
             <button id="bViewChart" title="コード表" aria-label="コード表"></button>
+            <button id="bViewNotes" title="ノーツ（MIDI）" aria-label="ノーツ"></button>
           </div>
         </div>
         <div class="progress">
@@ -462,6 +486,7 @@ const UI_ICON = {
   pause: '<path d="M6.5 4.5h4v15h-4zM13.5 4.5h4v15h-4z"/>',
   mixer: '<path d="M4 7h9M17 7h3M4 17h3M11 17h9"/><circle cx="15" cy="7" r="2.2"/><circle cx="9" cy="17" r="2.2"/>',
   check: '<path d="M5 12.5l4.5 4.5L19 7.5"/>',
+  notes: '<rect x="3" y="14" width="18" height="7" rx="1.5"/><path d="M7.5 14v4M12 14v4M16.5 14v4"/><rect x="5" y="3" width="2.6" height="8" rx="1"/><rect x="10.7" y="6" width="2.6" height="5" rx="1"/><rect x="16.4" y="2" width="2.6" height="7" rx="1"/>',
   bolt: '<path d="M13 2L4 14h7l-1 8 9-12h-7z"/>',
   shuffle: '<path d="M3 7h4l10 10h4M3 17h4l3-3M14 10l3-3h4M18 4l3 3-3 3M18 14l3 3-3 3"/>',
   search: '<circle cx="11" cy="11" r="7"/><path d="M20.5 20.5l-4.5-4.5"/>',
@@ -791,6 +816,7 @@ function deriveBeats() {
   const barOf = new Array(t.length);
   for (const b of bars) for (let i = b[0]; i < b[1]; i++) barOf[i] = b;
   B = { t, ch, starts: new Set(starts), bars, barOf, sigs, pickup: starts[0] > 0, bpm };
+  if (typeof notesPrepared !== "undefined") notesPrepared = {};   // quantized notes follow the grid
 }
 function pulseBpm(t) {
   const d = []; for (let i = 1; i < t.length; i++) d.push(t[i] - t[i - 1]);
@@ -1219,8 +1245,11 @@ function drawToggles() {
   $("bRegion").classList.toggle("on", hasRegion());
   $("bViewMixer").classList.toggle("on", prefs.view === "mixer");
   $("bViewChart").classList.toggle("on", prefs.view === "chart");
+  $("bViewNotes").classList.toggle("on", prefs.view === "notes");
   $("vMixer").hidden = prefs.view !== "mixer";
   $("vChart").hidden = prefs.view !== "chart";
+  $("vNotes").hidden = prefs.view !== "notes";
+  $("chips").hidden = prefs.view === "notes";
 }
 function loopChanged() {
   drawToggles(); saveSong(); dirty = true;
@@ -1236,6 +1265,7 @@ function frame() {
   dirty = false; lastDrawPos = p;
   const frac = total ? clamp(p / total, 0, 1) : 0;
   if (prefs.view === "mixer") drawWaves(frac);
+  else if (prefs.view === "notes") drawNotes(p / SR);
   $("seekFill").style.width = `${frac * 100}%`;
   const lp = $("seekLoop");
   lp.style.display = hasRegion() ? "block" : "none";
@@ -1309,6 +1339,7 @@ async function openSong(dir) {
     navigator.mediaSession.metadata = new MediaMetadata({ title: song.title, artist: song.artist || "", artwork: song.cover ? [{ src: cv.src, sizes: "360x360", type: "image/jpeg" }] : [] });
   }
   renderSongList(); renderRows(); renderChips(); renderStrip(); renderChart(); drawToggles(); drawBpmKey(); drawPlay();
+  notesData = {}; notesPrepared = {}; loadNotes();
   const mine = song;
   try {
     const r = await fetch(`/api/song?song=${encodeURIComponent(song.dir)}`, { credentials: "same-origin" });
@@ -1635,12 +1666,273 @@ $("sepSend").onclick = () => {
   sepSend && sepSend(profile);
 };
 
+
+/* ================================================================ falling notes (MIDI) */
+const NOTE_COLORS = ["#ffd84d", "#ff5d5d", "#45c6d6", "#7ee081", "#c38dff", "#ff9f45", "#ff7fbf", "#9fb7ff"];
+const KIND = { piano: "keys", "digital-piano": "keys", keys: "keys", keyboards: "keys", "piano-strings": "keys", upper: "keys",
+  organ: "pad", synth: "pad", strings: "strings", brass: "pad", woodwind: "lead", bass: "bass", guitar: "guitar",
+  "acoustic-guitar": "guitar", "electric-guitar": "guitar", lead: "lead", vocals: "lead", chorus: "chorus" };
+const GM_PROGRAM = { keys: 0, pad: 89, strings: 48, bass: 33, guitar: 27, lead: 53, chorus: 52, other: 0 };
+let notesData = {}, notesPrepared = {}, notesTimer = 0;
+const nPrefs = Object.assign({ win: 3, quant: 0, hidden: {} }, store.get("notesPrefs", {}));
+const saveNPrefs = () => store.set("notesPrefs", nPrefs);
+
+async function loadNotes() {
+  if (!song) return;
+  clearTimeout(notesTimer);
+  const mine = song;
+  try {
+    const r = await fetch(`/api/notes?song=${encodeURIComponent(song.dir)}`, { credentials: "same-origin" });
+    if (!r.ok || song !== mine) return;
+    notesData = await r.json();
+  } catch { return; }
+  notesPrepared = {};
+  renderNotesBar();
+  if (Object.values(notesData).some((e) => e.status === "queued" || e.status === "running")) notesTimer = setTimeout(loadNotes, 2000);
+}
+const doneTracks = () => Object.entries(notesData).filter(([, e]) => e.status === "done");
+function trackColor(id) { const ids = doneTracks().map(([k]) => k); return NOTE_COLORS[Math.max(0, ids.indexOf(id)) % NOTE_COLORS.length]; }
+const trackLabel = (id) => NAMES[notesData[id]?.part] || notesData[id]?.part || id;
+const isShown = (id) => !(nPrefs.hidden[song.dir] || []).includes(id);
+function renderNotesBar() {
+  const done = doneTracks();
+  $("nParts").replaceChildren(...done.map(([id]) => {
+    const b = document.createElement("button"); b.className = "npart" + (isShown(id) ? "" : " off");
+    b.innerHTML = `<i style="background:${trackColor(id)}"></i><span></span>`; b.querySelector("span").textContent = trackLabel(id);
+    b.title = `${trackLabel(id)}（${notesData[id].notes.length} ノーツ・${notesData[id].model === "piano" ? "ピアノ専用モデル" : "Basic Pitch"}）`;
+    b.onclick = () => {
+      const h = new Set(nPrefs.hidden[song.dir] || []); h.has(id) ? h.delete(id) : h.add(id);
+      nPrefs.hidden[song.dir] = [...h]; saveNPrefs(); renderNotesBar(); dirty = true;
+    };
+    return b;
+  }));
+  const busy = Object.entries(notesData).filter(([, e]) => e.status === "queued" || e.status === "running");
+  const err = Object.entries(notesData).filter(([, e]) => e.status === "error");
+  $("nStat").textContent = busy.length ? `MIDI を作成中: ${busy.map(([id, e]) => trackLabel(id) + (e.status === "queued" ? "（待ち）" : "…")).join("、")}`
+    : err.length ? `失敗: ${err.map(([id, e]) => `${trackLabel(id)}（${e.message}）`).join("、")}`
+    : done.length ? "" : "まだ MIDI がありません。「MIDI を作る」でパートを選んでください（1パート数秒）。";
+  $("nSave").disabled = !done.length;
+  dirty = true;
+}
+function makePop() {
+  const pitched = Object.entries(notesData);
+  // default: the keyboard-like parts and the chorus, but not "upper" / "original" (they overlap everything)
+  const def = (e) => e.status !== "done" && !["upper", "original", "other", "instrumental", "music"].includes(e.part)
+    && ["keys", "pad", "strings", "chorus"].includes(KIND[e.part]);
+  openPop($("nMake"), `<h3>MIDI を作るパート</h3>
+    <div style="max-height:46vh;overflow:auto">${pitched.map(([id, e]) => `<label class="row" style="margin:6px 0"><input type="checkbox" value="${esc(id)}" ${def(e) ? "checked" : ""}>
+      <span style="flex:1">${esc(trackLabel(id))} <span style="color:var(--muted);font-size:12px">${e.group === "mix" ? "" : "（重ねる用）"}</span></span>
+      <span class="sub" style="margin:0">${{ done: "作成済み", queued: "待ち", running: "作成中", error: "失敗" }[e.status] || ""}</span></label>`).join("")}</div>
+    <div class="row"><label>モデル</label><div class="btns"><button class="btn on" data-m="basic">標準（Basic Pitch）</button><button class="btn" data-m="piano">ピアノ専用</button></div></div>
+    <p class="sub">標準はどの楽器にも使える。ピアノ専用はピアノのパート向け（打鍵の強さまで取れるが、分離した音では標準より良いとは限らない）。作成済みのパートを選ぶと作り直す。</p>
+    <div class="btns" style="margin-top:8px"><button class="btn pri" id="nGo">作成</button></div>`, (pop) => {
+    let model = "basic";
+    pop.querySelectorAll("[data-m]").forEach((b) => { b.onclick = () => { model = b.dataset.m; pop.querySelectorAll("[data-m]").forEach((x) => x.classList.toggle("on", x === b)); }; });
+    pop.querySelector("#nGo").onclick = async () => {
+      const ids = [...pop.querySelectorAll("input:checked")].map((i) => i.value);
+      if (!ids.length) { toast("パートを選んでください"); return; }
+      closePop();
+      const r = await fetch(`/api/transcribe?song=${encodeURIComponent(song.dir)}&tracks=${encodeURIComponent(JSON.stringify(ids))}&model=${model}`,
+        { method: "POST", credentials: "same-origin" });
+      if (!r.ok) toast("作成できません: " + (await r.text()), 5000);
+      loadNotes();
+    };
+  });
+}
+function optsPop() {
+  openPop($("nOpts"), `<h3>ノーツの表示</h3>
+    ${rangeRow("見える長さ", "oWin", 1, 8, 0.5, nPrefs.win, (v) => `${v} 秒`)}
+    <div class="row"><label>クオンタイズ</label><div class="btns">${[[0, "オフ"], [2, "8分"], [4, "16分"]].map(([v, l]) => `<button class="btn ${nPrefs.quant === v ? "on" : ""}" data-q="${v}">${l}</button>`).join("")}</div></div>
+    <p class="sub">クオンタイズは検出した拍に合わせてノーツの位置をそろえる（表示と MIDI 保存に反映。元のデータは変わらない）。キーを移調しているとノーツも移調して表示する。</p>`, (pop) => {
+    bindRange(pop, "oWin", (v) => `${v} 秒`, (v) => { nPrefs.win = v; saveNPrefs(); dirty = true; });
+    pop.querySelectorAll("[data-q]").forEach((b) => { b.onclick = () => {
+      nPrefs.quant = +b.dataset.q; saveNPrefs(); notesPrepared = {}; dirty = true;
+      pop.querySelectorAll("[data-q]").forEach((x) => x.classList.toggle("on", x === b));
+    }; });
+  });
+}
+// time <-> position on the pulse grid (pulse index + fraction); outside the grid the first / last pulse length is used
+function secToPos(sec) {
+  const t = B.t, n = t.length;
+  if (sec <= t[0]) return (sec - t[0]) / (t[1] - t[0]);
+  if (sec >= t[n - 1]) return n - 1 + (sec - t[n - 1]) / (t[n - 1] - t[n - 2]);
+  const i = lowerBound(t, sec) - 1;
+  return i + (sec - t[i]) / (t[i + 1] - t[i]);
+}
+function posToSec(pos) {
+  const t = B.t, n = t.length;
+  if (pos <= 0) return t[0] + pos * (t[1] - t[0]);
+  if (pos >= n - 1) return t[n - 1] + (pos - n + 1) * (t[n - 1] - t[n - 2]);
+  const i = Math.floor(pos);
+  return t[i] + (pos - i) * (t[i + 1] - t[i]);
+}
+// notes as shown: quantized (if on), sorted by start, with the longest duration for range queries
+function prepared(id) {
+  if (notesPrepared[id]) return notesPrepared[id];
+  let ns = notesData[id].notes;
+  if (nPrefs.quant && B && B.t.length > 2) {
+    const q = nPrefs.quant;
+    ns = ns.map(([s, e, p, v]) => {
+      const a = Math.round(secToPos(s) * q) / q;
+      const b = Math.max(a + 1 / q, Math.round(secToPos(e) * q) / q);
+      return [posToSec(a), posToSec(b), p, v];
+    });
+  }
+  ns = ns.slice().sort((x, y) => x[0] - y[0]);
+  const maxDur = ns.reduce((m, n) => Math.max(m, n[1] - n[0]), 0);
+  return (notesPrepared[id] = { ns, starts: ns.map((n) => n[0]), maxDur });
+}
+const isBlack = (p) => [1, 3, 6, 8, 10].includes(((p % 12) + 12) % 12);
+function keyLayout(lo, hi, w) {
+  let whites = 0; for (let p = lo; p <= hi; p++) if (!isBlack(p)) whites++;
+  const W = w / whites, x = {}, wd = {};
+  let k = 0;
+  for (let p = lo; p <= hi; p++) {
+    if (!isBlack(p)) { x[p] = k * W; wd[p] = W; k++; } else { x[p] = k * W - W * 0.32; wd[p] = W * 0.64; }
+  }
+  return { x, wd, W };
+}
+function drawNotes(now) {
+  const c = $("nCanvas"); if (!c || c.offsetParent === null) return;
+  const dpr = window.devicePixelRatio || 1, w = Math.round(c.clientWidth * dpr), h = Math.round(c.clientHeight * dpr);
+  if (c.width !== w || c.height !== h) { c.width = w; c.height = h; }
+  const g = c.getContext("2d");
+  g.fillStyle = "#10141a"; g.fillRect(0, 0, w, h);
+  const ids = doneTracks().map(([id]) => id).filter(isShown);
+  // keyboard range: the notes in view (at least 3 octaves), snapped to whole octaves
+  let lo = 108, hi = 21;
+  for (const id of ids) for (const n of notesData[id].notes) { if (n[2] + semi < lo) lo = n[2] + semi; if (n[2] + semi > hi) hi = n[2] + semi; }
+  if (lo > hi) { lo = 48; hi = 84; }
+  lo = Math.max(21, lo - (lo % 12) - 0); hi = Math.min(108, hi + (11 - (hi % 12)) + 1);
+  if (hi - lo < 36) { const mid = (lo + hi) / 2; lo = Math.max(21, Math.round(mid - 18) - (Math.round(mid - 18) % 12)); hi = Math.min(108, lo + 36); }
+  const L = keyLayout(lo, hi, w);
+  const kh = Math.min(120 * dpr, h * 0.2), y0 = h - kh, pps = y0 / nPrefs.win;
+  // octave guides and bar lines
+  g.fillStyle = "rgba(255,255,255,.035)";
+  for (let p = lo; p <= hi; p++) if (p % 12 === 0) g.fillRect(L.x[p], 0, 1 * dpr, y0);
+  if (B) {
+    g.font = `${11 * dpr}px system-ui`; g.textBaseline = "bottom";
+    B.bars.forEach(([i0], bi) => {
+      const t = B.t[i0]; if (t < now - 0.05 || t > now + nPrefs.win) return;
+      const y = y0 - (t - now) * pps;
+      g.fillStyle = "rgba(255,255,255,.12)"; g.fillRect(0, y, w, 1 * dpr);
+      g.fillStyle = "rgba(255,255,255,.35)"; g.fillText(String(bi + (B.pickup ? 0 : 1)), 6 * dpr, y - 2 * dpr);
+    });
+  }
+  // notes
+  const active = {};
+  for (const id of ids) {
+    const P = prepared(id), col = trackColor(id);
+    let i = lowerBound(P.starts, now - P.maxDur - 0.1);
+    for (; i < P.ns.length && P.ns[i][0] <= now + nPrefs.win; i++) {
+      const [s, e, p0, v] = P.ns[i], p = p0 + semi;
+      if (e < now || p < lo || p > hi) continue;
+      const yb = y0 - (s - now) * pps, yt = y0 - (e - now) * pps;
+      const x = L.x[p] + L.wd[p] * 0.08, ww = L.wd[p] * 0.84;
+      const top = Math.max(0, yt), bot = Math.min(y0, yb);
+      if (bot <= top) continue;
+      g.globalAlpha = 0.55 + 0.45 * (v / 127);
+      g.fillStyle = col;
+      roundRect(g, x, top, ww, Math.max(2 * dpr, bot - top), Math.min(5 * dpr, ww / 3)); g.fill();
+      g.globalAlpha = 1;
+      if (s <= now && e > now) active[p] = col;
+    }
+  }
+  // keyboard
+  for (let p = lo; p <= hi; p++) if (!isBlack(p)) {
+    g.fillStyle = active[p] || "#f4f1e8"; g.fillRect(L.x[p] + 0.5 * dpr, y0, L.W - 1 * dpr, kh);
+    if (p % 12 === 0) { g.fillStyle = active[p] ? "#14181e" : "#8a8f98"; g.font = `${Math.max(8, Math.min(12, L.W / dpr * 0.45)) * dpr}px system-ui`; g.textAlign = "center"; g.textBaseline = "bottom"; g.fillText(`C${p / 12 - 1}`, L.x[p] + L.W / 2, h - 4 * dpr); g.textAlign = "left"; }
+  }
+  for (let p = lo; p <= hi; p++) if (isBlack(p)) {
+    g.fillStyle = active[p] || "#1b1d22"; g.fillRect(L.x[p], y0, L.wd[p], kh * 0.62);
+  }
+  // hit line glow
+  g.fillStyle = "rgba(255,255,255,.25)"; g.fillRect(0, y0 - 1 * dpr, w, 2 * dpr);
+  for (const p in active) {
+    const grd = g.createRadialGradient(L.x[p] + L.wd[p] / 2, y0, 0, L.x[p] + L.wd[p] / 2, y0, L.W * 1.2);
+    grd.addColorStop(0, "rgba(255,255,255,.7)"); grd.addColorStop(1, "rgba(255,255,255,0)");
+    g.fillStyle = grd; g.fillRect(L.x[p] - L.W, y0 - L.W * 1.2, L.W * 3, L.W * 1.4);
+  }
+  if (!ids.length) {
+    g.fillStyle = "#8d97a6"; g.font = `${14 * dpr}px system-ui`; g.textAlign = "center";
+    g.fillText(doneTracks().length ? "表示するパートを選んでください" : "「MIDI を作る」でパートを MIDI にすると、ここにノーツが落ちてくる", w / 2, y0 / 2); g.textAlign = "left";
+  }
+}
+function roundRect(g, x, y, w, h, r) {
+  g.beginPath();
+  if (g.roundRect) g.roundRect(x, y, w, h, r); else g.rect(x, y, w, h);
+}
+
+// ---- Standard MIDI File: one track per part, tempo map and time signatures from the beat grid
+function saveMidi() {
+  const ids = doneTracks().map(([id]) => id).filter(isShown);
+  if (!ids.length || !B) { toast("保存する MIDI がありません"); return; }
+  const PPQ = 480, m = mainMeter(), compound = [6, 9, 12].includes(m) && B.bpm >= 130, fast = signature(m, B.bpm).endsWith("/8");
+  const tpp = fast ? PPQ / 2 : PPQ;               // ticks per pulse: pulses are eighths in x/8 meters
+  const t = B.t, n = t.length;
+  const t0Ticks = Math.max(0, Math.round(t[0] / (t[1] - t[0]))) * tpp;   // whole pulses before the first beat
+  const tick = (sec) => {
+    if (sec < t[0]) return t[0] > 0 ? Math.max(0, Math.round(sec / t[0] * t0Ticks)) : 0;
+    return Math.round(t0Ticks + secToPos(sec) * tpp);
+  };
+  const vlq = (v) => { const b = [v & 0x7f]; while ((v >>= 7)) b.unshift((v & 0x7f) | 0x80); return b; };
+  const u32 = (v) => [(v >>> 24) & 255, (v >>> 16) & 255, (v >>> 8) & 255, v & 255];
+  const chunk = (evs) => {
+    evs.sort((a, b) => a.tick - b.tick || a.ord - b.ord);
+    const bytes = []; let last = 0;
+    for (const e of evs) { bytes.push(...vlq(e.tick - last), ...e.data); last = e.tick; }
+    bytes.push(0, 0xff, 0x2f, 0);
+    return [0x4d, 0x54, 0x72, 0x6b, ...u32(bytes.length), ...bytes];
+  };
+  const text = (type, s) => { const b = [...new TextEncoder().encode(s)]; return [0xff, type, ...vlq(b.length), ...b]; };
+  // conductor track
+  const cond = [{ tick: 0, ord: 0, data: text(0x03, song.name.normalize("NFKC")) }];
+  const usPerQ = (sec) => Math.round(sec * 1e6 * (PPQ / tpp));
+  const tempoEv = (tk, us) => ({ tick: tk, ord: 1, data: [0xff, 0x51, 3, (us >> 16) & 255, (us >> 8) & 255, us & 255] });
+  if (t0Ticks > 0) cond.push(tempoEv(0, usPerQ(t[0] / (t0Ticks / tpp))));
+  let lastUs = 0;
+  for (let i = 0; i < n - 1; i++) {
+    const us = usPerQ(t[i + 1] - t[i]);
+    if (us <= 0 || us > 0xffffff) continue;        // a broken grid must not write tempo 0
+    if (Math.abs(us - lastUs) > lastUs * 0.004) { cond.push(tempoEv(t0Ticks + i * tpp, us)); lastUs = us; }
+  }
+  let lastSig = "";
+  for (const [i0, i1] of B.bars) {
+    const sig = signature(i1 - i0, B.bpm);
+    if (sig === lastSig || i1 - i0 < 2) continue;
+    const [num, den] = sig.split("/").map(Number);
+    cond.push({ tick: t0Ticks + i0 * tpp, ord: 2, data: [0xff, 0x58, 4, num, Math.log2(den), den === 8 ? 12 : 24, 8] });
+    lastSig = sig;
+  }
+  const tracksOut = [chunk(cond)];
+  ids.forEach((id, k) => {
+    const ch = k >= 9 ? k + 1 : k;                 // skip channel 10 (drums)
+    const prog = GM_PROGRAM[KIND[notesData[id].part] || "other"];
+    // English part names: Japanese DAWs read track names as Shift_JIS, others as UTF-8
+    const evs = [{ tick: 0, ord: 0, data: text(0x03, notesData[id].part) }, { tick: 0, ord: 1, data: [0xc0 | (ch & 15), prog] }];
+    for (const [s, e, p0, v] of prepared(id).ns) {
+      const p = Math.max(0, Math.min(127, p0 + semi)), a = tick(s), b = Math.max(a + 1, tick(e));
+      evs.push({ tick: a, ord: 3, data: [0x90 | (ch & 15), p, v] }, { tick: b, ord: 2, data: [0x80 | (ch & 15), p, 0] });
+    }
+    tracksOut.push(chunk(evs));
+  });
+  const head = [0x4d, 0x54, 0x68, 0x64, 0, 0, 0, 6, 0, 1, 0, tracksOut.length, (PPQ >> 8) & 255, PPQ & 255];
+  const blob = new Blob([new Uint8Array([...head, ...tracksOut.flat()])], { type: "audio/midi" });
+  const a = document.createElement("a"); a.href = URL.createObjectURL(blob);
+  a.download = `${song.name}${semi ? `_${semi > 0 ? "+" : ""}${semi}` : ""}.mid`;
+  document.body.append(a); a.click(); a.remove(); setTimeout(() => URL.revokeObjectURL(a.href), 5000);
+  toast(`MIDI を保存しました（${ids.length} パート${nPrefs.quant ? "・クオンタイズ" : ""}${semi ? "・移調" : ""}）`);
+}
+$("nMake").onclick = makePop;
+$("nOpts").onclick = optsPop;
+$("nSave").onclick = saveMidi;
+
 /* ================================================================ wiring */
 function setIcons() {
   const set = (id, k) => { $(id).innerHTML = svg(UI_ICON[k]); };
   set("bReset", "reset"); set("bDownload", "download"); set("bMore", "more"); set("bList", "list"); set("bSide", "panel");
   set("bMetro", "metro"); set("bRegion", "region"); set("bLoop", "loop"); set("bBack", "back"); set("bFwd", "fwd");
-  set("bViewMixer", "mixer"); set("bViewChart", "chart");
+  set("bViewMixer", "mixer"); set("bViewChart", "chart"); set("bViewNotes", "notes");
   set("bLib", "chevron"); set("searchIcon", "search"); set("addIcon", "plus"); set("miniBack", "back"); set("miniFwd", "fwd");
   set("sepClose", "chevron"); set("hifiIcon", "bolt");
 }
@@ -1672,6 +1964,7 @@ $("bReset").onclick = () => {
 };
 $("bViewMixer").onclick = () => { prefs.view = "mixer"; savePrefs(); drawToggles(); relayout(); };
 $("bViewChart").onclick = () => { prefs.view = "chart"; savePrefs(); drawToggles(); curCell = -2; curBar = -1; dirty = true; };
+$("bViewNotes").onclick = () => { prefs.view = "notes"; savePrefs(); drawToggles(); loadNotes(); dirty = true; };
 const narrow = () => matchMedia("(max-width: 1100px)").matches;
 $("bList").onclick = () => {
   if (narrow()) $("app").classList.add("drawer");
