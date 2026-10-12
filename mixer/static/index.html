@@ -1279,22 +1279,28 @@ function regionPop() {
 }
 function downloadPop() {
   const has = hasRegion(), mod = tempo !== 1 || semi !== 0;
+  let codec = "aac";
   openPop($("bDownload"), `<h3>書き出し（m4a）</h3>
+    <div class="row"><label>形式</label><div class="btns"><button class="btn on" data-xc="aac">AAC 256kbps</button><button class="btn" data-xc="alac">ロスレス（ALAC・大きい）</button></div></div>
     <div class="btns"><button class="btn pri" id="xAll">曲全体</button><button class="btn" id="xReg" ${has ? "" : "disabled"}>区間だけ${has ? `（${fmt(loopA / SR)}〜${fmt(loopB / SR)}）` : ""}</button></div>
-    <p class="sub">今の音量・パン・ミュート・ソロ・マスター${mod ? "・テンポ・キー" : ""}のとおりに混ぜて AAC 256kbps で保存する。</p>`, (pop) => {
-    pop.querySelector("#xAll").onclick = () => { exportMix(false); closePop(); };
-    pop.querySelector("#xReg").onclick = () => { exportMix(true); closePop(); };
+    <p class="sub">今の音量・パン・ミュート・ソロ・マスター${mod ? "・テンポ・キー" : ""}のとおりに混ぜて保存する。</p>`, (pop) => {
+    pop.querySelectorAll("[data-xc]").forEach((b) => { b.onclick = () => {
+      codec = b.dataset.xc;
+      pop.querySelectorAll("[data-xc]").forEach((x) => x.classList.toggle("on", x === b));
+    }; });
+    pop.querySelector("#xAll").onclick = () => { exportMix(false, codec); closePop(); };
+    pop.querySelector("#xReg").onclick = () => { exportMix(true, codec); closePop(); };
   });
 }
-function exportMix(region) {
+function exportMix(region, codec = "aac") {
   const master = Math.pow(10, prefs.master / 20), g = {}, pan = {};
   for (const t of tracks) { const v = effGain(t) * master; if (v > 0) { g[t.id] = +v.toFixed(5); if (t.pan) pan[t.id] = t.pan; } }
   if (!Object.keys(g).length) { toast("鳴っているパートがありません"); return; }
-  const q = new URLSearchParams({ song: song.dir, g: JSON.stringify(g), pan: JSON.stringify(pan), t: tempo, p: semi });
+  const q = new URLSearchParams({ song: song.dir, g: JSON.stringify(g), pan: JSON.stringify(pan), t: tempo, p: semi, codec });
   if (region) { q.set("start", loopA); q.set("end", loopB); }
   const a = document.createElement("a"); a.href = "/api/export?" + q; a.download = "";
   document.body.append(a); a.click(); a.remove();
-  toast("書き出し中… しばらくするとダウンロードが始まります", 6000);
+  toast(codec === "alac" ? "書き出し中（ロスレス・時間がかかります）… しばらくするとダウンロードが始まります" : "書き出し中… しばらくするとダウンロードが始まります", 6000);
 }
 function morePop() {
   openPop($("bMore"), `<h3>設定</h3>

@@ -429,8 +429,8 @@ class Library:
             a = raw[start:start + frames].astype(np.float32) / 32768
         return audio.fit_length(a, frames, CHANNELS)
 
-    def export(self, song, gains, start, end, tempo=1.0, semi=0, pans=None):
-        """Mix the tracks with the given linear gains (and pans, -1..1) into an AAC m4a.
+    def export(self, song, gains, start, end, tempo=1.0, semi=0, pans=None, codec="aac"):
+        """Mix the tracks with the given linear gains (and pans, -1..1) into an m4a (codec: aac or alac).
 
         start/end are frames of the original song; with a tempo change the range is
         taken from the rendered variant. Returns (bytes, filename, log line)."""
@@ -477,11 +477,11 @@ class Library:
         name = f"{m['song']}_mix{tag}.m4a"
         with tempfile.TemporaryDirectory(prefix="mixer-export-") as tmp:
             out = Path(tmp) / "mix.m4a"
-            audio.write_m4a(out, mix, sr, codec="aac", bitrate="256k",
+            audio.write_m4a(out, mix, sr, codec=codec, bitrate="256k",
                             metadata={"title": Path(name).stem, "album": m["song"]},
                             cover_source=m.get("input") if Path(m.get("input", "")).is_file() else None)
             data = out.read_bytes()
-        return data, name, f"export {name}: {', '.join(used) or 'silence'}{norm}"
+        return data, name, f"export {name} ({codec}): {', '.join(used) or 'silence'}{norm}"
 
     def pcm(self, path, total_frames, start, frames, raw_s16=None):
         """Interleaved s16le bytes for [start, start+frames), zero-padded past the end."""
@@ -684,9 +684,13 @@ class Handler(BaseHTTPRequestHandler):
                 return self.send(HTTPStatus.OK, json.dumps(body), "application/json", [("Cache-Control", "no-store")])
             if url.path == "/api/export":
                 end = q.get("end")
+                codec = q.get("codec", "aac")
+                if codec not in ("aac", "alac"):
+                    raise ValueError(f"unknown codec: {codec}")
                 data, name, line = self.lib.export(q.get("song", ""), json.loads(q.get("g", "{}")),
                                                    int(q.get("start", 0)), None if end in (None, "") else int(end),
-                                                   float(q.get("t", 1)), int(q.get("p", 0)), json.loads(q.get("pan", "{}")))
+                                                   float(q.get("t", 1)), int(q.get("p", 0)), json.loads(q.get("pan", "{}")),
+                                                   codec=codec)
                 self.log_message("%s", line)
                 disp = f"attachment; filename=\"mix.m4a\"; filename*=UTF-8''{quote(name)}"
                 return self.send(HTTPStatus.OK, data, "audio/mp4",
