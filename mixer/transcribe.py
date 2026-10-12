@@ -20,6 +20,9 @@ Models
           note F1 at 150 ms: 0.92 vs 0.87 for the YourMT3 strings pipeline; on section strings it keeps the
           held voices that YourMT3 cuts up. About 1 min 45 s per song ("large": 10 min, more ghost notes).
   auto    per part: AUTO_PIANO parts -> piano, AUTO_MS kinds -> ms, AUTO_MT3 kinds -> mt3, everything else -> basic.
+  msl     MuScriptor large (same pipeline as ms; manual pick for finishing work). Measured on the same 30 s strings
+          clip (天球のMúsica): 876 notes vs medium's 655 (more inner voices kept), fragments <0.1 s 0.8 % vs 1.2 %,
+          wall time 3 m 26 s vs 57 s (about 3.4x slower; weights are in the Hugging Face cache after setup.sh --full).
 
 Raw output is cleaned per kind of instrument (PROFILES): playable range, minimum length,
 fragments of one held note joined, overtone ghosts (octave / twelfth above a louder note)
@@ -43,7 +46,7 @@ import soundfile as sf
 from pipeline import audio
 
 VERSION = 7
-MODELS = ("auto", "basic", "mt3", "ms", "piano")
+MODELS = ("auto", "basic", "mt3", "ms", "msl", "piano")
 AUTO_PIANO = {"piano", "digital-piano"}   # parts where Transkun did better than Basic Pitch
 AUTO_MS = {"strings"}                   # kinds where MuScriptor did better than YourMT3
 AUTO_MT3 = {"lead"}                     # kinds where YourMT3 did better than Basic Pitch
@@ -191,15 +194,21 @@ def muscriptor_available():
     return muscriptor_bin().exists()
 
 
-def muscriptor_notes(y, sr, part, progress=lambda f: None):
+def large_available():
+    """MuScriptor "large" weights are in the Hugging Face cache (its first use downloads them otherwise)."""
+    hub = Path.home() / ".cache" / "huggingface" / "hub" / "models--MuScriptor--muscriptor-large"
+    return hub.is_dir() and any(hub.glob("snapshots/*/model.safetensors"))
+
+
+def muscriptor_notes(y, sr, part, progress=lambda f: None, model=MS_MODEL):
     """Raw MuScriptor note events [(start, end, pitch, 1.0)] for mono audio, from its CLI (jsonl streamed to
-    stdout: progress follows the notes' start times)."""
+    stdout: progress follows the notes' start times). model: CLI model size ("small"/"medium"/"large")."""
     instruments = MS_INSTRUMENTS.get(part.rsplit("-rest", 1)[0]) or MS_INSTRUMENTS.get(kind_of(part))
     total = len(y) / sr
     with tempfile.TemporaryDirectory(prefix="ms-") as tmp:
         wav = os.path.join(tmp, "in.wav")
         sf.write(wav, y, sr, subtype="FLOAT")
-        cmd = [os.fspath(muscriptor_bin()), "transcribe", wav, "--model", MS_MODEL, "-f", "jsonl", "-o", "-",
+        cmd = [os.fspath(muscriptor_bin()), "transcribe", wav, "--model", model, "-f", "jsonl", "-o", "-",
                "--detect-tempo", "false"] + (["--instruments", instruments] if instruments else [])
         err = open(os.path.join(tmp, "err.txt"), "w+")
         proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=err, text=True)
@@ -394,8 +403,9 @@ def transcribe(path, part, model="basic", progress=lambda f: None):
     progress(0.05)
     kind = kind_of(part)
     melodia = PROFILES[kind].get("melodia", True)
-    if model == "ms":
-        raw = muscriptor_notes(y, 44100, part, lambda f: progress(0.05 + 0.85 * f))
+    if model in ("ms", "msl"):
+        raw = muscriptor_notes(y, 44100, part, lambda f: progress(0.05 + 0.85 * f),
+                               model="large" if model == "msl" else MS_MODEL)
         # MuScriptor holds notes well: no joining here (it would merge real repeated notes), only the check
         # against the spectrum and the voice limit
         notes = clean(check_with_spectrum(raw, y, 44100, **MS_SPECTRUM), kind, min_len=0.03, join_gap=-1,

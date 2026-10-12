@@ -1903,7 +1903,7 @@ const KIND = { piano: "keys", "digital-piano": "keys", keys: "keys", keyboards: 
   organ: "pad", synth: "pad", strings: "strings", brass: "pad", woodwind: "lead", bass: "bass", guitar: "guitar",
   "acoustic-guitar": "guitar", "electric-guitar": "guitar", lead: "lead", vocals: "lead", chorus: "chorus" };
 const GM_PROGRAM = { keys: 0, pad: 89, strings: 48, bass: 33, guitar: 27, lead: 53, chorus: 52, other: 0 };
-const NOTE_MODELS = { basic: "Basic Pitch", mt3: "YourMT3", ms: "MuScriptor", piano: "Transkun" };
+const NOTE_MODELS = { basic: "Basic Pitch", mt3: "YourMT3", ms: "MuScriptor", msl: "MuScriptor large", piano: "Transkun" };
 // transcription picker cards, fast -> slow; copy adapted from README「ノーツ表示」節
 const MODEL_INFO = [
   { id: "auto", label: "自動（おすすめ）", sub: "パートごとに下のモデルを自動で使い分ける" },
@@ -1911,8 +1911,9 @@ const MODEL_INFO = [
   { id: "piano", label: "ピアノ専用（Transkun）", sub: "ピアノで最も正確、打鍵の強さも取れる（1パート数秒）" },
   { id: "mt3", label: "高精度（YourMT3）", sub: "ボーカル・木管・弦で標準より正確。ベースと歪んだギターは取りこぼしが多い（1パート10〜30秒）" },
   { id: "ms", label: "高精度・遅い（MuScriptor）", sub: "弦楽で最も正確、パートの楽器だけを聞き取る（1パート約2分）" },
+  { id: "msl", label: "最精・非常に遅い（MuScriptor large）", sub: "仕上げたいパート用。1パート約10分かかる" },
 ];
-let modelAvail = { ms: true, mt3: true }, modelAvailDone = false;
+let modelAvail = { ms: true, msl: true, mt3: true }, modelAvailDone = false;
 async function fetchModelAvail() {          // GET /api/models, cached for the page's lifetime
   if (modelAvailDone) return;
   try {

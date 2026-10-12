@@ -665,7 +665,8 @@ class Handler(BaseHTTPRequestHandler):
                                  "application/json", [("Cache-Control", "no-store")])
             if url.path == "/api/models":
                 # which high-accuracy models are installed (setup.sh --full); the picker grays out the rest
-                body = json.dumps({"ms": transcribe.muscriptor_available(), "mt3": yourmt3.available()})
+                body = json.dumps({"ms": transcribe.muscriptor_available(), "msl": transcribe.large_available(),
+                                   "mt3": yourmt3.available()})
                 return self.send(HTTPStatus.OK, body, "application/json; charset=utf-8",
                                  [("Cache-Control", "no-store")])
             if url.path == "/api/song":
