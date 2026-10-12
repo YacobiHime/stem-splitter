@@ -459,6 +459,10 @@ const CHUNK_S = 8;            // PCM is fetched in chunks of this many seconds
 const LOOKAHEAD_S = 2.5;      // audio is scheduled this far ahead of the playhead
 const MIN_DB = -40;           // fader at the bottom = off
 const MAX_DB = 6;
+// faders are shown as a percentage of unity gain (100% = 0 dB, 200% = +6 dB); the stored state stays in dB
+const dbToPct = (db) => Math.round(100 * 10 ** (db / 20));
+const pctToDb = (p) => p <= 0 ? MIN_DB : Math.min(MAX_DB, Math.max(MIN_DB + 0.5, 20 * Math.log10(p / 100)));
+const fpct = (p) => p <= 0 ? "off" : `${p}%`;
 const NAMES = {
   lead: "リード", chorus: "コーラス", drums: "ドラム", bass: "ベース", guitar: "ギター",
   keyboards: "キーボード", original: "原曲", upper: "上物", piano: "ピアノ", strings: "ストリングス",
@@ -1079,17 +1083,18 @@ const ro = new ResizeObserver((es) => {
 function trackRow(t, colorIdx) {
   const el = document.createElement("div"); el.className = "trk";
   el.innerHTML = `<button class="icon" title="${esc(t.label)}（タップでミュート）" aria-label="${esc(t.label)} のミュート">${svg(partIcon(t.part))}<span class="badge">S</span></button>
-    <div class="vol"><input type="range" min="${MIN_DB}" max="${MAX_DB}" step="0.5" aria-label="${esc(t.label)} の音量"><span class="val"></span></div>
+    <div class="vol"><input type="range" min="0" max="200" step="1" aria-label="${esc(t.label)} の音量"><span class="val"></span></div>
     <canvas class="wave" aria-label="${esc(t.label)} の波形（タップで移動・横ドラッグで区間選択）"></canvas>
     <button class="menu" title="${esc(t.label)} の設定" aria-label="${esc(t.label)} の設定">${svg(UI_ICON.more)}</button>`;
   const fader = el.querySelector("input"), val = el.querySelector(".val"), vol = el.querySelector(".vol");
   t.draw = () => {
-    fader.value = t.db;
-    fader.style.setProperty("--fill", `${((t.db - MIN_DB) / (MAX_DB - MIN_DB)) * 100}%`);
-    val.textContent = t.db <= MIN_DB ? "off" : `${t.db > 0 ? "+" : ""}${t.db.toFixed(1)} dB`;
+    const p = t.db <= MIN_DB ? 0 : dbToPct(t.db);
+    fader.value = p;
+    fader.style.setProperty("--fill", `${(p / 200) * 100}%`);
+    val.textContent = fpct(p);
   };
   let hideTimer = 0;
-  fader.addEventListener("input", () => { t.db = +fader.value; t.draw(); vol.classList.add("drag"); clearTimeout(hideTimer); hideTimer = setTimeout(() => vol.classList.remove("drag"), 900); applyGains(); });
+  fader.addEventListener("input", () => { t.db = pctToDb(+fader.value); t.draw(); vol.classList.add("drag"); clearTimeout(hideTimer); hideTimer = setTimeout(() => vol.classList.remove("drag"), 900); applyGains(); });
   fader.addEventListener("dblclick", () => { t.db = 0; t.draw(); applyGains(); });
   el.querySelector(".icon").addEventListener("click", () => { t.mute = !t.mute; applyGains(); });
   el.querySelector(".menu").addEventListener("click", (e) => trackMenu(t, e.currentTarget));
@@ -1156,12 +1161,12 @@ const fpan = (v) => (Math.abs(v) < 0.01 ? "C" : v < 0 ? `L${Math.round(-v * 100)
 
 function trackMenu(t, anchor) {
   openPop(anchor, `<h3>${esc(t.label)} <span style="color:var(--muted);font-weight:400">${esc(t.part)}</span></h3>
-    ${rangeRow("音量", "mVol", MIN_DB, MAX_DB, 0.5, t.db, fdb)}
+    ${rangeRow("音量", "mVol", 0, 200, 1, dbToPct(t.db), fpct)}
     ${rangeRow("パン", "mPan", -1, 1, 0.05, t.pan, fpan)}
     <div class="btns" style="margin-top:12px">
       <button class="btn ${t.mute ? "on" : ""}" id="mMute">ミュート</button>
       <button class="btn ${t.solo ? "on" : ""}" id="mSolo">ソロ</button>
-      <button class="btn" id="mZero">0 dB・中央に戻す</button>
+      <button class="btn" id="mZero">100%・中央に戻す</button>
       ${t.group === "extra" ? '<button class="btn" id="mHide">外す</button>' : ""}
     </div>
     ${t.group === "mix" && REFINE_UI.some(([, , ok]) => ok(t.part)) ? `<h3 style="margin:16px 0 8px">さらに分離</h3>
@@ -1169,7 +1174,7 @@ function trackMenu(t, anchor) {
         `<button class="btn rrow" data-refine="${m}">${l}<small>${REFINE_SUB[m] || ""}</small></button>`).join("")}</div>` : ""}
     ${t.parent ? `<div class="btns" style="margin-top:12px"><button class="btn" id="mMerge">「${esc(partName(t.parent))}」にまとめ直す</button></div>` : ""}
     ${t.group === "mix" && (REFINE_UI.some(([, , ok]) => ok(t.part)) || t.parent) ? '<p class="sub">分離し直したパートだけ処理するので速い（数秒〜数十秒）。終わると読み込み直す。分けたパートを足すと元のパートと同じ音になる（分けきれなかった音は「残り」）。</p>' : ""}`, (pop) => {
-    const vol = bindRange(pop, "mVol", fdb, (v) => { t.db = v; t.draw(); applyGains(); });
+    const vol = bindRange(pop, "mVol", fpct, (v) => { t.db = pctToDb(v); t.draw(); applyGains(); });
     const pan = bindRange(pop, "mPan", fpan, (v) => { t.pan = Math.abs(v) < 0.03 ? 0 : v; applyGains(); });
     pop.querySelector("#mMute").onclick = (e) => { t.mute = !t.mute; e.currentTarget.classList.toggle("on", t.mute); applyGains(); };
     pop.querySelector("#mSolo").onclick = (e) => { t.solo = !t.solo; e.currentTarget.classList.toggle("on", t.solo); applyGains(); };
