@@ -117,6 +117,25 @@ steps:
     outputs: {piano: alt_mega_piano}
     optional: true
 
+  # ---- 比較用（--optional）: 新世代候補。聴き比べて採用したら上の本体ステップの model を差し替える
+  - name: vocals_alt2       # ボーカル新世代（MelBand Roformer SYHFT 系の最新）
+    model: MelBandRoformerSYHFTV3Epsilon.ckpt
+    input: original
+    outputs: {vocals: alt_vocals_syhft, other: alt_inst_syhft}
+    optional: true
+
+  - name: karaoke_alt2      # カラオケ新世代（mel_band karaoke gabox v2）
+    model: mel_band_roformer_karaoke_gabox_v2.ckpt
+    input: vocals
+    outputs: {Vocals: alt_lead_gabox2, Instrumental: alt_backing_gabox2}
+    optional: true
+
+  - name: karaoke_alt3      # カラオケ（mel_band karaoke aufr33-viperx）
+    model: model_mel_band_roformer_karaoke_aufr33_viperx_sdr_10.1956.ckpt
+    input: vocals
+    outputs: {karaoke: alt_karaoke_viperx, other: alt_karaoke_viperx_other}
+    optional: true
+
 # output/<曲名>/ に並べる最終ファイル: {楽器名: work の名前 または そのリスト}（この順番が manifest / ログの順）
 # リストは足し合わせ、名前の前に - を付けると引き算
 # ファイル名は filename_pattern で決まる。{song}=曲名, {part}=楽器名, {nn}=上からの通し番号(00,01,...)

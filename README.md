@@ -297,8 +297,8 @@ Tailscale の端末キーには有効期限が設定される場合がある。�
 
 | 役割 | モデル | 比較用（--optional） |
 |---|---|---|
-| ボーカル | BS-Roformer-Resurrection (pcunwa) | becruily_deux |
-| Lead/Back | bs_roformer_karaoke_frazer_becruily | mel_band_roformer_bve_gonza |
+| ボーカル | BS-Roformer-Resurrection (pcunwa) | becruily_deux、MelBandRoformer SYHFT V3Epsilon（新世代。`work/alt_vocals_syhft.wav`） |
+| Lead/Back | bs_roformer_karaoke_frazer_becruily | mel_band_roformer_bve_gonza、karaoke gabox v2（`alt_lead_gabox2` / `alt_backing_gabox2`）、karaoke aufr33-viperx（`alt_karaoke_viperx`。新世代） |
 | ドラム/ベース/ピアノ | BS-Roformer-SW | Mega53 piano |
 | Strings | gilliaan_bowedstrings_bs_v1 | gilliaan_bowedstrings_bs_v2（register 済み）, Mega53 bowed_strings |
 | Synth/Keys/Organ/Digital Piano | Mega53 単ステム版 | — |

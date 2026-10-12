@@ -38,6 +38,9 @@
 | ④ Strings v2（比較） | `gilliaan_bowedstrings_bs_v2`（`pymss register` で登録） | https://huggingface.co/gilliaan/Stem-Separation-Models （`BowedStrings/BandSplitRoformer/gilliaan_bsroformer_bowedstrings_v2.ckpt`）。ファイルは `custom/gilliaan/` | 表記なし | `e49feede4125404930ea4dd2cd634b8a5850cc9e24dc0565a01ccac466a5bbff` |
 | ④ Strings（比較） | `bs_mega_53stem_bowed_strings_mvsep.ckpt` | noblebarkrr（上と同じ） | 表記なし | `598a644d78dd6a385140b2134733eef42d9525805a84d55f224c80a1ca39ff61` |
 | ③ Piano（比較） | `bs_mega_53stem_piano_mvsep.ckpt` | noblebarkrr（上と同じ） | 表記なし | `8e58ad544386136028ec1f5764bb95a235235492144112d94782ff1333905fe9` |
+| ① ボーカル新世代（比較） | `MelBandRoformerSYHFTV3Epsilon.ckpt` | https://huggingface.co/SYH99999 （MVSep の SYHFT 系マージの最新版 V3 Epsilon。取得日 2026-10-12） | 表記なし | `4c886092e4aae13aa089263a0d54d483643f58c16ec221aed37268e2c1031397` |
+| ② Lead/Back 新世代（比較） | `mel_band_roformer_karaoke_gabox_v2.ckpt` | MVSep の gabox 作（MVSep の Lead/Back Vocals に「Mel-RoFormer (Karaoke/Duet) by gabox」として搭載。配布は noblebarkrr/mvsepless_resources 経由） | 表記なし | `ec34be50327aeaf1a996c27977f5c30d1ac80c0076d69683d3e5184c31ea29d3` |
+| ② Lead/Back（比較） | `model_mel_band_roformer_karaoke_aufr33_viperx_sdr_10.1956.ckpt` | aufr33 / viperx 作（UVR コミュニティ。python-audio-separator のモデルリスト所収） | 表記なし | `1de20d459332fe8869aeb01327a31df0032262706e1365114e852dc271779813` |
 
 ## 再登録手順（カスタムモデル）
 
