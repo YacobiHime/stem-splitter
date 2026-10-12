@@ -171,6 +171,9 @@ input[type=range]::-moz-range-thumb { width: 18px; height: 18px; border-radius: 
 .lib { padding: 8px 4px 120px; }
 .lib h1 { font-size: 34px; margin: 18px 0 22px; }
 .lib-tools { display: flex; gap: 12px; }
+.pl-chips { display: flex; gap: 8px; flex-wrap: wrap; margin: 14px 2px 0; }
+.pl-chip { height: 34px; padding: 0 14px; border-radius: 17px; border: 1px solid var(--line2); background: rgba(255,255,255,.03); white-space: nowrap; }
+.pl-chip.on { background: var(--accent-bg); border-color: var(--accent); color: #fff; }
 .search { flex: 1; min-width: 0; display: flex; align-items: center; gap: 10px; height: 52px; padding: 0 16px; border-radius: 14px; background: var(--panel); border: 1px solid var(--line); color: var(--muted); }
 .search input { flex: 1; min-width: 0; background: none; border: 0; outline: none; color: var(--text); font: inherit; font-size: 16px; }
 .btn.add { flex: none; height: 52px; padding: 0 22px; display: flex; align-items: center; gap: 8px; font-size: 16px; border-radius: 14px; }
@@ -239,6 +242,14 @@ input[type=range]::-moz-range-thumb { width: 18px; height: 18px; border-radius: 
 .nprog .np { text-align: right; font-variant-numeric: tabular-nums; color: var(--text); }
 #nCanvas { width: 100%; height: clamp(300px, calc(100dvh - 380px), 900px); border-radius: 14px; background: #10141a; display: block; }
 @media (max-width: 760px) { #nCanvas { height: clamp(240px, calc(100dvh - 500px), 700px); } .nbar .btn { height: 36px; padding: 0 10px; font-size: 13px; } }
+/* hidden chord strip: the canvas grows by the strip's height (70+18 desktop / 54+14 mobile) */
+.app.no-strip #strip { display: none; }
+.app.no-strip #nCanvas { height: clamp(300px, calc(100dvh - 292px), 900px); }
+@media (max-width: 760px) { .app.no-strip #nCanvas { height: clamp(240px, calc(100dvh - 432px), 700px); } }
+/* fullscreen notes view (session-only): header and strip hidden, transport bar stays */
+.app.notes-full .top, .app.notes-full #strip { display: none; }
+.app.notes-full #nCanvas { height: clamp(400px, calc(100dvh - 250px), 1600px); }
+@media (max-width: 760px) { .app.notes-full #nCanvas { height: clamp(300px, calc(100dvh - 330px), 1200px); } }
 
 /* separation settings sheet */
 .modal { position: fixed; inset: 0; z-index: 25; background: rgba(0,0,0,.55); display: grid; place-items: center; padding: 20px; }
@@ -342,6 +353,7 @@ input[type=range]::-moz-range-thumb { width: 18px; height: 18px; border-radius: 
         <button class="btn pri add" id="bAdd"><span id="addIcon"></span>追加</button>
         <input type="file" id="fileIn" accept="audio/*,.flac,.m4a,.mp3,.wav,.ogg,.opus,.aac,.aiff,.aif,.wma,.ape,.wv,.alac" multiple hidden>
       </div>
+      <div class="pl-chips" id="plChips"></div>
       <div class="lib-bar"><span id="libCount"></span><button class="sortb" id="bSort"></button></div>
       <div class="lib-head"><span></span><span>曲名</span><span>アーティスト</span><span>BPM</span><span>キー</span><span>長さ</span><span></span></div>
       <div id="libRows"></div>
@@ -378,6 +390,7 @@ input[type=range]::-moz-range-thumb { width: 18px; height: 18px; border-radius: 
           <button class="btn" id="nMake">MIDI を作る</button>
           <button class="btn" id="nOpts">表示</button>
           <button class="btn" id="nSave">MIDI 保存</button>
+          <button class="btn" id="nFull">全画面</button>
         </div>
       </div>
       <div class="nstat" id="nStat"></div>
@@ -552,7 +565,7 @@ const store = {
   get(k, d = null) { try { const v = JSON.parse(localStorage.getItem(k)); return v ?? d; } catch { return d; } },
   set(k, v) { try { localStorage.setItem(k, JSON.stringify(v)); } catch {} },
 };
-const prefs = Object.assign({ master: 0, metroVol: -6, metroOn: false, countIn: false, view: "mixer", sideClosed: false, chordSimple: false }, store.get("prefs", {}));
+const prefs = Object.assign({ master: 0, metroVol: -6, metroOn: false, countIn: false, view: "mixer", sideClosed: false, chordSimple: false, strip: true }, store.get("prefs", {}));
 const savePrefs = () => store.set("prefs", prefs);
 
 /* ================================================================ state */
@@ -778,7 +791,7 @@ function tick() {
     return !old;
   });
   prefetch();
-  if (!segs.length && nextPos >= vtotal && !loopActive()) { pausedPos = 0; playing = false; drawPlay(); }
+  if (!segs.length && nextPos >= vtotal && !loopActive()) { pausedPos = 0; playing = false; drawPlay(); playlistAdvance(); }
   dirty = true;
 }
 
@@ -930,6 +943,7 @@ let cellX = [], cellW = [], cellEls = [], curCell = -2, curBar = -1;
 function renderStrip() {
   const inner = $("stripInner");
   cellEls = []; cellX = []; cellW = []; curCell = -2;
+  if (!prefs.strip) { inner.replaceChildren(); return; }   // hidden: keep cellX empty so the frame() strip block self-disables
   if (!B) { inner.replaceChildren(); $("stripMsg").textContent = A ? "拍を検出できませんでした" : "解析中…"; $("stripMsg").hidden = false; return; }
   $("stripMsg").hidden = true;
   const frag = document.createDocumentFragment();
@@ -952,6 +966,7 @@ function renderStrip() {
   measureStrip();
 }
 function measureStrip() {
+  if (!prefs.strip) { cellX = []; dirty = true; return; }
   const x0 = $("stripInner").getBoundingClientRect().left;   // the transform moves both alike
   cellX = cellEls.map((c) => c.getBoundingClientRect().left - x0);
   cellW = cellEls.map((c) => c.offsetWidth);
@@ -1354,16 +1369,18 @@ function frame() {
   if (hasRegion()) { lp.style.left = `${(loopA / total) * 100}%`; lp.style.width = `${((loopB - loopA) / total) * 100}%`; }
   $("tCur").textContent = fmt(p / SR);
   $("tRem").textContent = "-" + fmt((total - p) / SR);
-  if (!B || !cellX.length) return;
-  // chord strip scrolls continuously with the playhead; the chart highlights the bar
+  if (!B) return;
+  // chord strip scrolls continuously with the playhead (when visible); the chart highlights the bar
   const sec = p / SR, i = lowerBound(B.t, sec + 1e-6) - 1;
-  let x;
-  if (i < 0) x = cellX[0] - ((B.t[0] - sec) / (B.t[1] - B.t[0])) * cellW[0];
-  else {
-    const t1 = i + 1 < B.t.length ? B.t[i + 1] : B.t[i] + (B.t[i] - B.t[Math.max(0, i - 1)] || 0.5);
-    x = cellX[i] + clamp((sec - B.t[i]) / (t1 - B.t[i]), 0, 1) * cellW[i];
+  if (cellX.length) {
+    let x;
+    if (i < 0) x = cellX[0] - ((B.t[0] - sec) / (B.t[1] - B.t[0])) * cellW[0];
+    else {
+      const t1 = i + 1 < B.t.length ? B.t[i + 1] : B.t[i] + (B.t[i] - B.t[Math.max(0, i - 1)] || 0.5);
+      x = cellX[i] + clamp((sec - B.t[i]) / (t1 - B.t[i]), 0, 1) * cellW[i];
+    }
+    $("stripInner").style.transform = `translateX(${Math.round($("strip").clientWidth * 0.3 - x)}px)`;
   }
-  $("stripInner").style.transform = `translateX(${Math.round($("strip").clientWidth * 0.3 - x)}px)`;
   if (i === curCell) return;
   cellEls[curCell]?.classList.remove("now"); cellEls[i]?.classList.add("now"); curCell = i;
   if (prefs.view !== "chart") return;
@@ -1442,6 +1459,7 @@ async function openSong(dir) {
 
 /* ================================================================ library */
 let jobs = [], uploads = [], libSort = store.get("libSort", "added"), jobTimer = 0;
+let playlists = [], curPlaylist = store.get("playlist", "");
 const isLib = () => !$("library").hidden;
 const fmtDur = (sec) => `${Math.floor(sec / 60)}:${String(Math.floor(sec % 60)).padStart(2, "0")}`;
 const STEP_JA = { convert: "読み込み", vocals: "ボーカル分離", karaoke: "リード/コーラス分離", six_stem: "楽器分離", upper: "上物",
@@ -1456,7 +1474,7 @@ function showLibrary() {
   $("library").hidden = false; $("player").hidden = true; $("app").classList.add("lib-mode"); closePop();
   if (location.hash && location.hash !== "#/") history.replaceState(null, "", "#/");
   document.title = "ライブラリ – Stem Mixer";
-  renderLibrary(); refreshSongs(); pollJobs();
+  renderLibrary(); refreshSongs(); refreshPlaylists(); pollJobs();
 }
 async function showPlayer(dir) {
   $("library").hidden = true; $("player").hidden = false; $("app").classList.remove("lib-mode");
@@ -1516,9 +1534,13 @@ function libRowEl(cls) { const d = document.createElement("div"); d.className = 
 function renderLibrary() {
   if (!isLib()) return;
   const q = $("libSearch").value.trim().toLowerCase();
-  const list = songs.filter((s) => !q || [s.title, s.artist, s.name].some((x) => (x || "").toLowerCase().includes(q)));
-  list.sort(libSort === "title" ? (a, b) => a.title.localeCompare(b.title, "ja") : (a, b) => (b.added || "").localeCompare(a.added || ""));
-  $("libCount").textContent = `全曲 (${songs.length})`;
+  const match = (s) => !q || [s.title, s.artist, s.name].some((x) => (x || "").toLowerCase().includes(q));
+  const pl = playlists.find((p) => p.name === curPlaylist);
+  // a selected playlist filters and orders the rows; dirs of deleted songs are skipped, not dropped
+  const list = pl ? pl.dirs.map((d) => songs.find((s) => s.dir === d)).filter((s) => s && match(s))
+    : songs.filter(match);
+  if (!pl) list.sort(libSort === "title" ? (a, b) => a.title.localeCompare(b.title, "ja") : (a, b) => (b.added || "").localeCompare(a.added || ""));
+  $("libCount").textContent = pl ? `${pl.name} (${list.length}曲)` : `全曲 (${songs.length})`;
   $("bSort").textContent = libSort === "title" ? "曲名順 ↓" : "追加日 ↓";
   const rows = [];
   for (const u of uploads) {
@@ -1565,15 +1587,111 @@ function renderLibrary() {
     r.querySelector(".menu").onclick = (e) => songMenu(s, e.currentTarget);
     rows.push(r);
   }
-  if (!rows.length) { const e = document.createElement("div"); e.className = "lib-empty"; e.textContent = q ? "見つかりません" : "まだ曲がありません。＋追加から音声ファイルを選んでください。"; rows.push(e); }
+  if (!rows.length) { const e = document.createElement("div"); e.className = "lib-empty"; e.textContent = q ? "見つかりません" : pl ? "まだ曲がありません。曲の「…」メニュー →「プレイリストに追加」で加えます。" : "まだ曲がありません。＋追加から音声ファイルを選んでください。"; rows.push(e); }
   $("libRows").replaceChildren(...rows);
   drawMini();
 }
+/* ---- playlists (server-side, see mixer/playlists.py) */
+async function apiPl(action, params) {
+  const qs = new URLSearchParams({ action, ...params });
+  const r = await fetch(`/api/playlists?${qs}`, { method: "POST", credentials: "same-origin" });
+  if (!r.ok) toast(await r.text(), 5000);
+  return r.ok;
+}
+async function refreshPlaylists() {
+  try {
+    const r = await fetch("/api/playlists", { credentials: "same-origin" });
+    if (r.ok) playlists = await r.json();
+  } catch {}
+  if (curPlaylist && !playlists.some((p) => p.name === curPlaylist)) { curPlaylist = ""; store.set("playlist", ""); }
+  renderPlaylists(); renderLibrary();
+}
+function selectPlaylist(name) {
+  curPlaylist = name; store.set("playlist", name);
+  renderPlaylists(); renderLibrary();
+}
+function renderPlaylists() {
+  const chip = (label, on, fn) => { const b = document.createElement("button");
+    b.className = "pl-chip" + (on ? " on" : ""); b.textContent = label; b.onclick = fn; return b; };
+  $("plChips").replaceChildren(
+    chip("すべて", !curPlaylist, () => selectPlaylist("")),
+    ...playlists.map((p) => chip(p.name, curPlaylist === p.name, () => selectPlaylist(p.name))),
+    chip("＋", false, (e) => plCreatePop(e.currentTarget)),
+    ...(curPlaylist ? [chip("編集", false, (e) => plManagePop(e.currentTarget))] : []));
+}
+function plCreatePop(anchor) {
+  openPop(anchor, `<h3>新規プレイリスト</h3>
+    <div class="row"><input type="text" id="plName" placeholder="プレイリスト名" style="flex:1;height:40px;padding:0 10px;border-radius:10px;border:1px solid var(--line2);background:none;color:var(--text);font:inherit;font-size:15px"></div>
+    <div class="btns"><button class="btn pri" id="plGo">作成</button></div>`, (pop) => {
+    const inp = pop.querySelector("#plName"); inp.focus();
+    const go = async () => {
+      if (!inp.value.trim()) return;
+      if (await apiPl("create", { name: inp.value })) { closePop(); await refreshPlaylists(); selectPlaylist(inp.value.trim()); }
+    };
+    pop.querySelector("#plGo").onclick = go;
+    inp.onkeydown = (e) => { if (e.key === "Enter") go(); };
+  });
+}
+function plManagePop(anchor) {
+  openPop(anchor, `<h3>プレイリスト「${esc(curPlaylist)}」</h3>
+    <div class="row"><input type="text" id="plTo" value="${esc(curPlaylist)}" style="flex:1;height:40px;padding:0 10px;border-radius:10px;border:1px solid var(--line2);background:none;color:var(--text);font:inherit;font-size:15px"></div>
+    <div class="btns"><button class="btn" id="plRe">名前を変更</button><button class="btn" id="plDel">削除</button></div>
+    <p class="sub">削除しても曲そのものは消えません。プレイリストに入れた曲の順序・追加は曲の「…」メニューからも変えられます。</p>`, (pop) => {
+    pop.querySelector("#plRe").onclick = async () => {
+      const to = pop.querySelector("#plTo").value.trim();
+      if (!to || to === curPlaylist) return;
+      if (await apiPl("rename", { name: curPlaylist, to })) { curPlaylist = to; store.set("playlist", to); closePop(); refreshPlaylists(); }
+    };
+    pop.querySelector("#plDel").onclick = async () => {
+      if (!confirm(`プレイリスト「${curPlaylist}」を削除しますか？`)) return;
+      if (await apiPl("delete", { name: curPlaylist })) { curPlaylist = ""; store.set("playlist", ""); closePop(); refreshPlaylists(); }
+    };
+  });
+}
+function plAddPop(s, anchor) {
+  openPop(anchor, `<h3>「${esc(s.title)}」を追加</h3>
+    <div id="plList">${playlists.map((p) => `<button class="opt part ${p.dirs.includes(s.dir) ? "on" : ""}" data-pl="${esc(p.name)}">
+      <span class="ol"><b>${esc(p.name)}</b><small>${p.dirs.length}曲</small></span>
+      <span class="ck">${p.dirs.includes(s.dir) ? svg(UI_ICON.check) : ""}</span></button>`).join("") || '<p class="sub">まだプレイリストがありません</p>'}</div>
+    <div class="btns" style="margin-top:8px"><button class="btn" id="plNew">＋ 新規プレイリスト</button></div>`, (pop) => {
+    pop.querySelectorAll("[data-pl]").forEach((b) => { b.onclick = async () => {
+      const name = b.dataset.pl, has = playlists.find((p) => p.name === name).dirs.includes(s.dir);
+      if (await apiPl(has ? "remove" : "add", { name, dir: s.dir })) { await refreshPlaylists(); closePop(); }
+    }; });
+    pop.querySelector("#plNew").onclick = (e) => plCreatePop(e.currentTarget);
+  });
+}
+async function plMove(dir, delta) {                    // delta: -1 / +1 over the raw dirs (server clamps)
+  const pl = playlists.find((p) => p.name === curPlaylist);
+  if (!pl) return;
+  const i = pl.dirs.indexOf(dir), to = i + delta;
+  if (i < 0 || to < 0 || to >= pl.dirs.length) return;
+  if (await apiPl("move", { name: curPlaylist, dir, to })) refreshPlaylists();
+}
+function playlistAdvance() {                           // auto-advance at song end within the selected playlist
+  const pl = playlists.find((p) => p.name === curPlaylist);
+  if (!pl || !song) return false;
+  const dirs = pl.dirs.filter((d) => songs.some((s) => s.dir === d));
+  const i = dirs.indexOf(song.dir);
+  if (i < 0 || i + 1 >= dirs.length) return false;
+  showPlayer(dirs[i + 1]).then(() => startAt(0, { countIn: prefs.countIn }));
+  return true;
+}
 function songMenu(s, anchor) {
+  const pl = playlists.find((p) => p.name === curPlaylist), inPl = pl && pl.dirs.includes(s.dir);
   openPop(anchor, `<h3>${esc(s.title)}</h3>
     <div class="btns"><button class="btn" id="smOpen">開く</button><button class="btn" id="smRe">分離し直す</button><button class="btn" id="smDel">削除</button></div>
+    <div class="btns" style="margin-top:8px"><button class="btn" id="smPl">プレイリストに追加</button>${inPl ? '<button class="btn" id="smUp">▲</button><button class="btn" id="smDown">▼</button><button class="btn" id="smOut">プレイリストから外す</button>' : ""}</div>
     <p class="sub">分離: ${({ auto: "自動検出", standard: "耳コピ用", "4stem": "4トラック", "2stem": "2トラック", custom: "カスタム", dnr: "会話/音楽/効果音" })[(s.profile || {}).mode || "standard"]}${(s.profile || {}).hifi ? "（HI-FI）" : ""}${(s.absent || []).length ? `（見つからなかった: ${s.absent.map(partName).join("・")}）` : ""}・${s.meter ? `拍子 ${s.meter}・` : ""}パート ${s.tracks.filter((t) => t.group === "mix").length} + ${s.tracks.filter((t) => t.group === "extra").length}。削除すると分離結果を output/.trash/ に移す（元に戻せる）。元の音声ファイルは残る。</p>`, (pop) => {
     pop.querySelector("#smOpen").onclick = () => { closePop(); showPlayer(s.dir); };
+    pop.querySelector("#smPl").onclick = (e) => plAddPop(s, e.currentTarget);
+    if (inPl) {
+      pop.querySelector("#smUp").onclick = async () => { closePop(); plMove(s.dir, -1); };
+      pop.querySelector("#smDown").onclick = async () => { closePop(); plMove(s.dir, +1); };
+      pop.querySelector("#smOut").onclick = async () => {
+        if (await apiPl("remove", { name: curPlaylist, dir: s.dir })) { closePop(); refreshPlaylists(); }
+      };
+    }
     pop.querySelector("#smRe").onclick = () => {
       closePop();
       openSeparation(s.title, s.profile || { mode: "standard" }, async (profile) => {
@@ -1921,7 +2039,8 @@ function optsPop() {
     ${rangeRow("表示ずれ", "oOff", -300, 300, 5, nPrefs.offset, (v) => (v > 0 ? "+" : "") + v + " ms")}
     <div class="row" style="align-items:flex-start"><label style="padding-top:10px">ノーツの長さ</label><div class="btns">${[["next", "打鍵ごとに区切る"], ["same", "同じ音だけ区切る"], ["full", "実際の長さ"]].map(([v, l]) => `<button class="btn ${nPrefs.len === v ? "on" : ""}" data-len="${v}">${l}</button>`).join("")}</div></div>
     <div class="row"><label>クオンタイズ</label><div class="btns">${[[0, "オフ"], [2, "8分"], [4, "16分"]].map(([v, l]) => `<button class="btn ${nPrefs.quant === v ? "on" : ""}" data-q="${v}">${l}</button>`).join("")}</div></div>
-    <p class="sub">「打鍵ごとに区切る」は、同じパートの次の打鍵の少し手前でノーツを切る（押すタイミングが見やすい。伸ばしている音も次の打鍵で切れる）。クオンタイズは検出した拍に合わせて位置をそろえる。どちらも表示と MIDI 保存に反映し、元のデータは変わらない。キーを移調しているとノーツも移調して表示する。表示ずれは、ノーツが音より早く鍵盤に着くとき（特に Bluetooth スピーカー）プラスにすると表示が遅くなる。</p>`, (pop) => {
+    <div class="row"><label>コード帯</label><div class="btns"><button class="btn ${prefs.strip ? "on" : ""}" data-strip="1">表示</button><button class="btn ${prefs.strip ? "" : "on"}" data-strip="0">隠す</button></div></div>
+    <p class="sub">「打鍵ごとに区切る」は、同じパートの次の打鍵の少し手前でノーツを切る（押すタイミングが見やすい。伸ばしている音も次の打鍵で切れる）。クオンタイズは検出した拍に合わせて位置をそろえる。どちらも表示と MIDI 保存に反映し、元のデータは変わらない。キーを移調しているとノーツも移調して表示する。表示ずれは、ノーツが音より早く鍵盤に着くとき（特に Bluetooth スピーカー）プラスにすると表示が遅くなる。コード帯を隠すとノーツの画面が広くなります。</p>`, (pop) => {
     bindRange(pop, "oWin", (v) => `${v} 秒`, (v) => { nPrefs.win = v; saveNPrefs(); dirty = true; });
     bindRange(pop, "oOff", (v) => (v > 0 ? "+" : "") + v + " ms", (v) => { nPrefs.offset = v; saveNPrefs(); dirty = true; });
     pop.querySelectorAll("[data-len]").forEach((b) => { b.onclick = () => {
@@ -1931,6 +2050,13 @@ function optsPop() {
     pop.querySelectorAll("[data-q]").forEach((b) => { b.onclick = () => {
       nPrefs.quant = +b.dataset.q; saveNPrefs(); notesPrepared = {}; dirty = true;
       pop.querySelectorAll("[data-q]").forEach((x) => x.classList.toggle("on", x === b));
+    }; });
+    pop.querySelectorAll("[data-strip]").forEach((b) => { b.onclick = () => {
+      prefs.strip = b.dataset.strip === "1"; savePrefs();
+      $("app").classList.toggle("no-strip", !prefs.strip);
+      renderStrip(); measureStrip();
+      pop.querySelectorAll("[data-strip]").forEach((x) => x.classList.toggle("on", x === b));
+      dirty = true;
     }; });
   });
 }
@@ -2139,6 +2265,11 @@ function saveMidi() {
 $("nMake").onclick = makePop;
 $("nOpts").onclick = optsPop;
 $("nSave").onclick = saveMidi;
+$("nFull").onclick = () => {
+  const on = $("app").classList.toggle("notes-full");
+  $("nFull").textContent = on ? "全画面解除" : "全画面";
+  dirty = true;
+};
 
 /* ================================================================ wiring */
 function setIcons() {
@@ -2203,7 +2334,8 @@ document.addEventListener("keydown", (e) => {
   else if (e.code === "ArrowRight") $("bFwd").click();
   else if (e.code === "KeyL") $("bLoop").click();
   else if (e.code === "KeyM") $("bMetro").click();
-  else if (e.code === "Escape") { closePop(); $("sep").hidden = true; }
+  else if (e.code === "Escape") { closePop(); $("sep").hidden = true;
+    if ($("app").classList.contains("notes-full")) { $("app").classList.remove("notes-full"); $("nFull").textContent = "全画面"; dirty = true; } }
 });
 window.addEventListener("resize", () => { measureStrip(); placePop(); });
 if ("mediaSession" in navigator) {
@@ -2216,11 +2348,13 @@ if ("mediaSession" in navigator) {
 (async () => {
   setIcons(); drawPlay(); drawToggles();
   if (prefs.sideClosed) $("app").classList.add("side-closed");
+  if (!prefs.strip) $("app").classList.add("no-strip");
   try {
     const r = await fetch("/api/songs", { credentials: "same-origin" });
     if (!r.ok) throw new Error(await r.text());
     songs = await r.json();
   } catch (err) { toast("曲一覧を読み込めません: " + err.message, 0); return; }
+  refreshPlaylists();
   setInterval(tick, 100);
   requestAnimationFrame(frame);
   // the last song is loaded (paused) so the mini player can resume it; the URL decides the view

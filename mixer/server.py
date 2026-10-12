@@ -47,6 +47,7 @@ from pipeline import audio
 
 from . import analysis
 from .jobs import Jobs
+from .playlists import Playlists
 from . import transcribe
 from . import yourmt3
 
@@ -506,6 +507,7 @@ class Handler(BaseHTTPRequestHandler):
     server_version = "stem-mixer"
     lib: Library
     jobs: Jobs
+    playlists: Playlists
     token: str
 
     def do_PUT(self):
@@ -574,6 +576,17 @@ class Handler(BaseHTTPRequestHandler):
                 dst = self.lib.delete(q.get("song", ""))
                 self.log_message("deleted %s -> %s", q.get("song"), dst)
                 return self.send(HTTPStatus.OK, "{}", "application/json")
+            if url.path == "/api/playlists":
+                pl = self.playlists
+                a = q.get("action", "")
+                if a == "create": pl.create(q.get("name", ""))
+                elif a == "rename": pl.rename(q.get("name", ""), q.get("to", ""))
+                elif a == "delete": pl.delete(q.get("name", ""))
+                elif a == "add": pl.add(q.get("name", ""), q.get("dir", ""), self.lib)
+                elif a == "remove": pl.remove(q.get("name", ""), q.get("dir", ""))
+                elif a == "move": pl.move(q.get("name", ""), q.get("dir", ""), q.get("to", "0"))
+                else: raise ValueError(f"unknown action: {a}")
+                return self.send(HTTPStatus.OK, "{}", "application/json")
         except (LookupError, ValueError) as e:
             return self.send(HTTPStatus.BAD_REQUEST, str(e))
         return self.send(HTTPStatus.NOT_FOUND, "not found")
@@ -623,6 +636,9 @@ class Handler(BaseHTTPRequestHandler):
                 return self.send(HTTPStatus.OK, body, "application/json; charset=utf-8", [("Cache-Control", "no-cache")])
             if url.path == "/api/jobs":
                 return self.send(HTTPStatus.OK, json.dumps(self.jobs.list(), ensure_ascii=False),
+                                 "application/json; charset=utf-8", [("Cache-Control", "no-store")])
+            if url.path == "/api/playlists":
+                return self.send(HTTPStatus.OK, json.dumps(self.playlists.list(), ensure_ascii=False),
                                  "application/json; charset=utf-8", [("Cache-Control", "no-store")])
             if url.path == "/api/notes":
                 return self.send(HTTPStatus.OK, json.dumps(self.lib.notes(q.get("song", ""))),
@@ -695,6 +711,7 @@ def main(argv=None):
 
     Handler.lib = Library(args.output)
     Handler.jobs = Jobs(Handler.lib)
+    Handler.playlists = Playlists()
     Handler.token = load_token()
     httpd = ThreadingHTTPServer((args.host, args.port), Handler)
     host = lan_ip() if args.host in ("0.0.0.0", "") else args.host
