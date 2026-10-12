@@ -1447,6 +1447,12 @@ async function openSong(dir) {
   document.title = `${song.title} – Stem Mixer`;
   if ("mediaSession" in navigator && window.MediaMetadata) {
     navigator.mediaSession.metadata = new MediaMetadata({ title: song.title, artist: song.artist || "", artwork: song.cover ? [{ src: cv.src, sizes: "360x360", type: "image/jpeg" }] : [] });
+    if (song.cover)                                     // lock screens fetch artwork without cookies: embed it
+      fetch(`/api/cover?song=${encodeURIComponent(song.dir)}`, { credentials: "same-origin" })
+        .then((r) => r.ok ? r.blob() : null)
+        .then((b) => b && new Promise((res) => { const f = new FileReader(); f.onload = () => res(f.result); f.onerror = () => res(null); f.readAsDataURL(b); }))
+        .then((url) => { if (url && song === mine) navigator.mediaSession.metadata = new MediaMetadata({ title: song.title, artist: song.artist || "", artwork: [{ src: url, sizes: "360x360", type: "image/jpeg" }] }); })
+        .catch(() => {});
   }
   renderSongList(); renderRows(); renderChips(); renderStrip(); renderChart(); drawToggles(); drawBpmKey(); drawPlay();
   notesData = {}; notesPrepared = {}; loadNotes();
@@ -1469,7 +1475,7 @@ async function openSong(dir) {
 
 
 /* ================================================================ library */
-let jobs = [], uploads = [], libSort = store.get("libSort", "added"), jobTimer = 0;
+let jobs = [], uploads = [], libSort = store.get("libSort", "added"), jobTimer = 0, libScroll = 0;
 let playlists = [], curPlaylist = store.get("playlist", "");
 const isLib = () => !$("library").hidden;
 const fmtDur = (sec) => `${Math.floor(sec / 60)}:${String(Math.floor(sec % 60)).padStart(2, "0")}`;
@@ -1486,8 +1492,10 @@ function showLibrary() {
   if (location.hash && location.hash !== "#/") history.replaceState(null, "", "#/");
   document.title = "ライブラリ – Stem Mixer";
   renderLibrary(); refreshSongs(); refreshPlaylists(); pollJobs();
+  requestAnimationFrame(() => window.scrollTo(0, libScroll));   // come back where the list was left
 }
 async function showPlayer(dir) {
+  if (isLib()) libScroll = window.scrollY;
   $("library").hidden = true; $("player").hidden = false; $("app").classList.remove("lib-mode");
   const want = "#/song/" + encodeURIComponent(dir);
   if (location.hash !== want) history.pushState(null, "", want);
@@ -1664,11 +1672,20 @@ function plAddPop(s, anchor) {
     <div id="plList">${playlists.map((p) => `<button class="opt part ${p.dirs.includes(s.dir) ? "on" : ""}" data-pl="${esc(p.name)}">
       <span class="ol"><b>${esc(p.name)}</b><small>${p.dirs.length}曲</small></span>
       <span class="ck">${p.dirs.includes(s.dir) ? svg(UI_ICON.check) : ""}</span></button>`).join("") || '<p class="sub">まだプレイリストがありません</p>'}</div>
-    <div class="btns" style="margin-top:8px"><button class="btn" id="plNew">＋ 新規プレイリスト</button></div>`, (pop) => {
+    <div class="btns" style="margin-top:8px"><button class="btn pri" id="plDone">完了</button><button class="btn" id="plNew">＋ 新規プレイリスト</button></div>
+    <p class="sub">複数のプレイリストに ON / OFF で入れられます。</p>`, (pop) => {
     pop.querySelectorAll("[data-pl]").forEach((b) => { b.onclick = async () => {
       const name = b.dataset.pl, has = playlists.find((p) => p.name === name).dirs.includes(s.dir);
-      if (await apiPl(has ? "remove" : "add", { name, dir: s.dir })) { await refreshPlaylists(); closePop(); }
+      if (await apiPl(has ? "remove" : "add", { name, dir: s.dir })) {
+        const pl = playlists.find((p) => p.name === name);
+        pl.dirs = has ? pl.dirs.filter((d) => d !== s.dir) : [...pl.dirs, s.dir];
+        b.classList.toggle("on", !has);
+        b.querySelector(".ck").innerHTML = !has ? svg(UI_ICON.check) : "";
+        b.querySelector(".ol small").textContent = `${pl.dirs.length}曲`;
+        renderPlaylists();
+      }
     }; });
+    pop.querySelector("#plDone").onclick = () => { refreshPlaylists(); closePop(); };
     pop.querySelector("#plNew").onclick = (e) => plCreatePop(e.currentTarget);
   });
 }
@@ -1687,6 +1704,12 @@ function playlistAdvance() {                           // auto-advance at song e
   if (i < 0 || i + 1 >= dirs.length) return false;
   showPlayer(dirs[i + 1]).then(() => startAt(0, { countIn: prefs.countIn }));
   return true;
+}
+function neighborSong(delta) {                         // prev / next song: the selected playlist, else library order
+  const pl = curPlaylist && playlists.find((p) => p.name === curPlaylist);
+  const order = pl ? pl.dirs.filter((d) => songs.some((s) => s.dir === d)) : songs.map((s) => s.dir);
+  const i = order.indexOf(song && song.dir) + delta;
+  return i >= 0 && i < order.length ? order[i] : null;
 }
 function songMenu(s, anchor) {
   const pl = playlists.find((p) => p.name === curPlaylist), inPl = pl && pl.dirs.includes(s.dir);
@@ -2354,6 +2377,11 @@ if ("mediaSession" in navigator) {
   try {
     navigator.mediaSession.setActionHandler("play", () => { if (!playing) togglePlay(); });
     navigator.mediaSession.setActionHandler("pause", () => { if (playing) togglePlay(); });
+    navigator.mediaSession.setActionHandler("seekbackward", (d) => seekTo(currentPos() - (d.seekOffset || 5) * SR));
+    navigator.mediaSession.setActionHandler("seekforward", (d) => seekTo(currentPos() + (d.seekOffset || 5) * SR));
+    navigator.mediaSession.setActionHandler("seekto", (d) => seekTo(d.seekTime * SR));
+    navigator.mediaSession.setActionHandler("previoustrack", () => { const p = neighborSong(-1); if (p) showPlayer(p).then(() => { if (playing) startAt(0); }); });
+    navigator.mediaSession.setActionHandler("nexttrack", () => { const n = neighborSong(1); if (n) showPlayer(n).then(() => { if (playing) startAt(0); }); });
   } catch {}
 }
 
