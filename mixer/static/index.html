@@ -146,6 +146,14 @@ input[type=range]::-moz-range-thumb { width: 18px; height: 18px; border-radius: 
 .pop .row > .v { min-width: 4.4em; text-align: right; font-variant-numeric: tabular-nums; }
 .pop .big { font-size: 26px; font-weight: 600; text-align: center; font-variant-numeric: tabular-nums; flex: 1; }
 .pop .sub { color: var(--muted); font-size: 12.5px; margin: 6px 0 0; }
+/* compact option cards for pickers inside popovers, + stacked rows with a sub-line */
+.pop .opt { min-height: 54px; padding: 0 12px; gap: 10px; margin-bottom: 8px; border-radius: 11px; }
+.pop .opt .ol b { font-size: 14px; }
+.pop .opt .ol small { font-size: 12px; }
+.pop .opt[disabled] { opacity: .45; }
+.pop .opt .tech { color: var(--muted); opacity: .8; }
+.rrow { display: block; width: 100%; height: auto; text-align: left; padding: 8px 12px; margin-bottom: 6px; }
+.rrow small { display: block; color: var(--muted); font-size: 12px; margin-top: 1px; }
 .btn { height: 40px; padding: 0 14px; border-radius: 10px; border: 1px solid var(--line2); background: rgba(255,255,255,.03); white-space: nowrap; }
 .btn.on { background: var(--accent-bg); border-color: var(--accent); color: #fff; }
 .btn.pri { background: var(--accent); border-color: var(--accent); color: #0d1a1d; font-weight: 700; }
@@ -461,12 +469,22 @@ const partIcon = (p) => ICON[p] || (p.startsWith("chorus") ? ICON.chorus : ICON[
 const REFINE_UI = [
   ["voice2", "声質で2つに分ける", (p) => ["chorus", "vocals", "lead"].includes(p) || p.startsWith("chorus")],
   ["duet", "2人の歌い手に分ける", (p) => ["chorus", "vocals", "lead"].includes(p) || p.startsWith("chorus")],
-  ["satb", "4声（ソプラノ・アルト・テナー・バス）に分ける・精度は低め", (p) => ["chorus", "vocals", "lead"].includes(p) || p.startsWith("chorus")],
+  ["satb", "4声（ソプラノ・アルト・テナー・バス）に分ける", (p) => ["chorus", "vocals", "lead"].includes(p) || p.startsWith("chorus")],
   ["lead_chorus", "リードとコーラスに分ける", (p) => p === "vocals"],
   ["kit", "キック・スネア・タム・ハイハット・シンバルに分ける", (p) => p === "drums"],
   ["acoustic", "アコギとエレキに分ける", (p) => p === "guitar"],
   ["instruments", "ピアノ・弦・シンセ・オルガンなどに分ける", (p) => ["keyboards", "upper", "other", "instrumental", "music"].includes(p)],
 ];
+// plain-language model family per method (mixer/profiles.py REFINE)
+const REFINE_SUB = {
+  voice2: "男声／女声を分けるモデル",
+  duet: "2人の歌い手を分けるモデル",
+  satb: "合唱（ソプラノ・アルト・テナー・バス）用のモデル。精度は低め",
+  lead_chorus: "ボーカル／インスト分離モデルでリードだけを取り出す",
+  kit: "ドラムをパーツごとに分ける専用モデル",
+  acoustic: "アコギだけを取り出す専用モデル",
+  instruments: "ピアノ・弦・木管・金管・オルガン・シンセ・キーボードの専用モデルを順に使う",
+};
 const SHARP = ["C","C#","D","D#","E","F","F#","G","G#","A","A#","B"];
 const FLAT  = ["C","Db","D","Eb","E","F","Gb","G","Ab","A","Bb","B"];
 const ICON = {
@@ -1132,7 +1150,8 @@ function trackMenu(t, anchor) {
       ${t.group === "extra" ? '<button class="btn" id="mHide">外す</button>' : ""}
     </div>
     ${t.group === "mix" && REFINE_UI.some(([, , ok]) => ok(t.part)) ? `<h3 style="margin:16px 0 8px">さらに分離</h3>
-      <div class="btns">${REFINE_UI.filter(([, , ok]) => ok(t.part)).map(([m, l]) => `<button class="btn" data-refine="${m}">${l}</button>`).join("")}</div>` : ""}
+      <div>${REFINE_UI.filter(([, , ok]) => ok(t.part)).map(([m, l]) =>
+        `<button class="btn rrow" data-refine="${m}">${l}<small>${REFINE_SUB[m] || ""}</small></button>`).join("")}</div>` : ""}
     ${t.parent ? `<div class="btns" style="margin-top:12px"><button class="btn" id="mMerge">「${esc(partName(t.parent))}」にまとめ直す</button></div>` : ""}
     ${t.group === "mix" && (REFINE_UI.some(([, , ok]) => ok(t.part)) || t.parent) ? '<p class="sub">分離し直したパートだけ処理するので速い（数秒〜数十秒）。終わると読み込み直す。分けたパートを足すと元のパートと同じ音になる（分けきれなかった音は「残り」）。</p>' : ""}`, (pop) => {
     const vol = bindRange(pop, "mVol", fdb, (v) => { t.db = v; t.draw(); applyGains(); });
@@ -1620,11 +1639,11 @@ $("miniFwd").onclick = () => $("bFwd").click();
 
 
 /* ================================================================ separation settings */
-const SEP_BASIC = [
-  { mode: "auto", label: "自動検出（おすすめ）", sub: "鳴っている楽器を判定して、その分だけトラックにする（ボーカル・コーラス・ドラム・ベース・ギター・ピアノ・弦・シンセなど。コーラスは2声なら2つに）" },
-  { mode: "standard", label: "耳コピ用（標準）", sub: "リード・コーラス・ドラム・ベース・ギター・キーボード ＋ ピアノ・弦・シンセなどの個別パート" },
-  { mode: "4stem", label: "ボーカル、ドラム、ベース、その他", sub: "4トラック" },
-  { mode: "2stem", label: "ボーカル、インストゥルメンタル", sub: "2トラック" },
+const SEP_BASIC = [   // tech: which separation models the mode runs (mixer/profiles.py), in plain words
+  { mode: "auto", label: "自動検出（おすすめ）", sub: "鳴っている楽器を判定して、その分だけトラックにする（ボーカル・コーラス・ドラム・ベース・ギター・ピアノ・弦・シンセなど。コーラスは2声なら2つに）", tech: "ボーカル分離・6ステム・各パートの専用モデル・コーラス分割の2モデル（鳴り方を判定して採用）" },
+  { mode: "standard", label: "耳コピ用（標準）", sub: "リード・コーラス・ドラム・ベース・ギター・キーボード ＋ ピアノ・弦・シンセなどの個別パート", tech: "上と同じモデル構成の定番（全部まとめて分ける）" },
+  { mode: "4stem", label: "ボーカル、ドラム、ベース、その他", sub: "4トラック", tech: "ボーカル分離と6ステムの2モデル" },
+  { mode: "2stem", label: "ボーカル、インストゥルメンタル", sub: "2トラック", tech: "ボーカル分離モデル1つだけ。いちばん速い" },
 ];
 const SEP_PARTS = [   // key, label, icon, split option label (null = on/off only)
   ["vocals", "ボーカル", "lead", "リードとコーラスに分ける"],
@@ -1677,12 +1696,12 @@ function openSeparation(title, init, onSend) {
 }
 function renderSeparation() {
   const st = sepState, body = [];
-  const opt = (cls, on, icon, label, sub, extra = "") =>
-    `<button class="opt ${cls} ${on ? "on" : ""}" ${extra}>${svg(icon)}<span class="ol"><b>${label}</b>${sub ? `<small>${sub}</small>` : ""}</span>` +
+  const opt = (cls, on, icon, label, sub, extra = "", tech = "") =>
+    `<button class="opt ${cls} ${on ? "on" : ""}" ${extra}>${svg(icon)}<span class="ol"><b>${label}</b>${sub ? `<small>${sub}</small>` : ""}${tech ? `<small class="tech">${tech}</small>` : ""}</span>` +
     `${extra.includes("data-part") && SPLITTABLE.includes(extra.match(/data-part="(\w+)"/)[1]) ? `<span class="chev ${sepOpen[extra.match(/data-part="(\w+)"/)[1]] ? "open" : ""}" data-chev="${extra.match(/data-part="(\w+)"/)[1]}">${svg(UI_ICON.chevron)}</span>` : ""}` +
     `<span class="ck">${on ? svg(UI_ICON.check) : ""}</span></button>`;
   body.push("<h2>基本的な分離</h2>");
-  for (const b of SEP_BASIC) body.push(opt("basic", st.mode === b.mode, UI_ICON.shuffle, b.label, b.sub, `data-mode="${b.mode}"`));
+  for (const b of SEP_BASIC) body.push(opt("basic", st.mode === b.mode, UI_ICON.shuffle, b.label, b.sub, `data-mode="${b.mode}"`, b.tech));
   body.push("<h2>カスタム分離</h2>");
   for (const [k, label, icon, splitLabel] of SEP_PARTS) {
     const v = st.mode === "custom" ? st.parts[k] : null;
@@ -1692,6 +1711,9 @@ function renderSeparation() {
       body.push(`<div class="sub-opts"><button class="btn ${v === "one" ? "on" : ""}" data-sub="${k}:one">まとめて</button><button class="btn ${v === "split" ? "on" : ""}" data-sub="${k}:split">${splitLabel}</button><button class="btn ${!v ? "on" : ""}" data-sub="${k}:off">分けない</button></div>`);
     }
   }
+  if (st.mode === "custom")   // which models custom mode runs (mixer/profiles.py build_steps)
+    body.push(`<p class="sub" style="margin-bottom:8px">選んだパートを、そのパート専用の分離モデルで順に取り出します（弦・木管・金管・オルガン・シンセ・キーボードはそれぞれ専用モデル。ギターのアコギ分割など、重ねる専用モデルもあります）。取り出し残りは「その他」に。` +
+      (Object.keys(st.parts).some((k) => st.parts[k]) ? "" : "パートを1つ以上選んでください。") + `</p>`);
   // chorus: only when the setting has a chorus track
   if (st.mode === "standard" || (st.mode === "custom" && st.parts.vocals === "split")) {
     const cur = st.refine.chorus || "";
@@ -1700,7 +1722,7 @@ function renderSeparation() {
       <p class="sub" style="margin-bottom:8px">コーラスをさらにパートに分ける（分けきれなかった音は「コーラス（残り）」）。4声は合唱用のモデルで精度は低め。あとからプレイヤーのトラックの「…」→「さらに分離」でも変えられる。</p>`);
   }
   body.push("<h2>マルチメディアセパレーション</h2>");
-  body.push(opt("basic", st.mode === "dnr", ICON.effects, "会話、サウンドトラック、効果音", "動画・映画の音声向け（3トラック）", 'data-mode="dnr"'));
+  body.push(opt("basic", st.mode === "dnr", ICON.effects, "会話、サウンドトラック、効果音", "動画・映画の音声向け（3トラック）。会話・音楽・効果音に分ける音声復元系モデル", 'data-mode="dnr"'));
   $("sepBody").innerHTML = body.join("");
   const [runs, n] = sepTracks(st);
   const sec = (runs * 8 + 12) * (st.hifi ? 3 : 1);   // a 4-5 minute song
@@ -1755,6 +1777,33 @@ const KIND = { piano: "keys", "digital-piano": "keys", keys: "keys", keyboards: 
   "acoustic-guitar": "guitar", "electric-guitar": "guitar", lead: "lead", vocals: "lead", chorus: "chorus" };
 const GM_PROGRAM = { keys: 0, pad: 89, strings: 48, bass: 33, guitar: 27, lead: 53, chorus: 52, other: 0 };
 const NOTE_MODELS = { basic: "Basic Pitch", mt3: "YourMT3", ms: "MuScriptor", piano: "Transkun" };
+// transcription picker cards, fast -> slow; copy adapted from README「ノーツ表示」節
+const MODEL_INFO = [
+  { id: "auto", label: "自動（おすすめ）", sub: "パートごとに下のモデルを自動で使い分ける" },
+  { id: "basic", label: "標準（Basic Pitch）", sub: "どんな楽器でも速くて安定（1パート数秒〜30秒）。ベース・歪んだギターはこれが一番確実" },
+  { id: "piano", label: "ピアノ専用（Transkun）", sub: "ピアノで最も正確、打鍵の強さも取れる（1パート数秒）" },
+  { id: "mt3", label: "高精度（YourMT3）", sub: "ボーカル・木管・弦で標準より正確。ベースと歪んだギターは取りこぼしが多い（1パート10〜30秒）" },
+  { id: "ms", label: "高精度・遅い（MuScriptor）", sub: "弦楽で最も正確、パートの楽器だけを聞き取る（1パート約2分）" },
+];
+let modelAvail = { ms: true, mt3: true }, modelAvailDone = false;
+async function fetchModelAvail() {          // GET /api/models, cached for the page's lifetime
+  if (modelAvailDone) return;
+  try {
+    const r = await fetch("/api/models", { credentials: "same-origin" });
+    if (r.ok) { modelAvail = await r.json(); modelAvailDone = true; }
+  } catch {}
+}
+// mirrors mixer/transcribe.py kind_of() / model_for()
+const kindOfPart = (p) => p in KIND ? KIND[p] : p.startsWith("chorus") ? "chorus"
+  : p.startsWith("vocals") ? "lead" : KIND[p.replace(/-rest$/, "")] || "other";
+const autoModelFor = (part) => ["piano", "digital-piano"].includes(part) ? "piano"
+  : kindOfPart(part) === "strings" && modelAvail.ms !== false ? "ms"
+  : kindOfPart(part) === "lead" && modelAvail.mt3 !== false ? "mt3" : "basic";
+function autoSummary(parts) {   // "Transkun（ピアノ）×1、MuScriptor（弦）×1、標準×2"
+  const c = {}, label = { piano: "Transkun（ピアノ）", ms: "MuScriptor（弦）", mt3: "YourMT3（ボーカル・木管）", basic: "標準" };
+  for (const p of parts) { const m = autoModelFor(p); c[m] = (c[m] || 0) + 1; }
+  return ["piano", "ms", "mt3", "basic"].filter((m) => c[m]).map((m) => `${label[m]}×${c[m]}`).join("、");
+}
 let notesData = {}, notesPrepared = {}, notesTimer = 0;
 const nPrefs = Object.assign({ win: 3, quant: 0, hidden: {}, len: "next" }, store.get("notesPrefs", {}));
 const saveNPrefs = () => store.set("notesPrefs", nPrefs);
@@ -1814,26 +1863,47 @@ function renderNotesBar() {
   dirty = true;
 }
 function makePop() {
-  const pitched = Object.entries(notesData);
-  const def = () => false;      // nothing checked: the user picks the parts
-  openPop($("nMake"), `<h3>MIDI を作るパート</h3>
-    <div style="max-height:46vh;overflow:auto">${pitched.map(([id, e]) => `<label class="row" style="margin:6px 0"><input type="checkbox" value="${esc(id)}" ${def(e) ? "checked" : ""}>
-      <span style="flex:1">${esc(trackLabel(id))} <span style="color:var(--muted);font-size:12px">${e.group === "mix" ? "" : "（重ねる用）"}</span></span>
-      <span class="sub" style="margin:0">${{ done: "作成済み", queued: "待ち", running: "作成中", error: "失敗" }[e.status] || ""}</span></label>`).join("")}</div>
-    <div class="row" style="align-items:flex-start"><label style="padding-top:10px">モデル</label><div class="btns"><button class="btn on" data-m="auto">自動</button><button class="btn" data-m="basic">標準（Basic Pitch）</button><button class="btn" data-m="mt3">高精度（YourMT3）</button><button class="btn" data-m="ms">高精度・遅い（MuScriptor）</button><button class="btn" data-m="piano">ピアノ専用（Transkun）</button></div></div>
-    <p class="sub">自動はピアノを Transkun、ストリングスを MuScriptor、ボーカル・木管を YourMT3、ほかを標準で作る。YourMT3 はボーカルで標準より正確だが、ベースや歪んだギターは取りこぼしが多い（1パート10〜30秒）。MuScriptor はストリングスでいちばん正確で、パートの楽器だけを聞き取る（1パート2分ほど）。ピアノ専用（Transkun）はピアノのパート向けで、分離したピアノでも標準よりずっと正確（打鍵の強さも取れる。1パート数秒）。作成済みのパートを選ぶと作り直す。</p>
-    <div class="btns" style="margin-top:8px"><button class="btn pri" id="nGo">作成</button></div>`, (pop) => {
-    let model = "auto";
-    pop.querySelectorAll("[data-m]").forEach((b) => { b.onclick = () => { model = b.dataset.m; pop.querySelectorAll("[data-m]").forEach((x) => x.classList.toggle("on", x === b)); }; });
-    pop.querySelector("#nGo").onclick = async () => {
-      const ids = [...pop.querySelectorAll("input:checked")].map((i) => i.value);
-      if (!ids.length) { toast("パートを選んでください"); return; }
-      closePop();
-      const r = await fetch(`/api/transcribe?song=${encodeURIComponent(song.dir)}&tracks=${encodeURIComponent(JSON.stringify(ids))}&model=${model}`,
-        { method: "POST", credentials: "same-origin" });
-      if (!r.ok) toast("作成できません: " + (await r.text()), 5000);
-      loadNotes();
+  fetchModelAvail().then(() => {
+    const pitched = Object.entries(notesData);
+    const def = () => false;      // nothing checked: the user picks the parts
+    const saved = store.get("noteModel", "auto");
+    let model = MODEL_INFO.some((m) => m.id === saved) && (saved === "auto" || modelAvail[saved] !== false) ? saved : "auto";
+    const card = (m) => {
+      const un = m.id !== "auto" && modelAvail[m.id] === false;
+      return `<button class="opt ${m.id === model ? "on" : ""}" data-m="${m.id}" ${un ? "disabled" : ""}>
+        <span class="ol"><b>${m.label}</b><small>${un ? "未導入（setup.sh --full で入れられます）" : m.sub}</small></span>
+        <span class="ck">${m.id === model ? svg(UI_ICON.check) : ""}</span></button>`;
     };
+    openPop($("nMake"), `<h3>MIDI を作るパート</h3>
+      <div style="max-height:30vh;overflow:auto">${pitched.map(([id, e]) => `<label class="row" style="margin:6px 0"><input type="checkbox" value="${esc(id)}" ${def(e) ? "checked" : ""}>
+        <span style="flex:1">${esc(trackLabel(id))} <span style="color:var(--muted);font-size:12px">${e.group === "mix" ? "" : "（重ねる用）"}</span></span>
+        <span class="sub" style="margin:0">${{ done: "作成済み", queued: "待ち", running: "作成中", error: "失敗" }[e.status] || ""}</span></label>`).join("")}</div>
+      <h3 style="margin:12px 0 8px">モデル</h3>
+      <div id="mModels">${MODEL_INFO.map(card).join("")}</div>
+      <p class="sub" id="mAuto" style="margin:2px 0 0"></p>
+      <div class="btns" style="margin-top:8px"><button class="btn pri" id="nGo">作成</button></div>`, (pop) => {
+      const checkedIds = () => [...pop.querySelectorAll("input:checked")].map((i) => i.value);
+      const paint = () => {                              // re-render the cards + the auto line
+        pop.querySelector("#mModels").innerHTML = MODEL_INFO.map(card).join("");
+        pop.querySelectorAll("#mModels [data-m]").forEach((b) => { b.onclick = () => { model = b.dataset.m; paint(); }; });
+        const ids = checkedIds();
+        pop.querySelector("#mAuto").textContent = model !== "auto" ? "" :
+          ids.length ? `選択したパート: ${autoSummary(ids.map((id) => notesData[id].part))}` :
+          "パートを選ぶと、自動でどのモデルを使うか表示します";
+      };
+      paint();
+      pop.onchange = paint;                              // property assignment: replaced, not stacked, on reopen
+      pop.querySelector("#nGo").onclick = async () => {
+        const ids = checkedIds();
+        if (!ids.length) { toast("パートを選んでください"); return; }
+        store.set("noteModel", model);
+        closePop();
+        const r = await fetch(`/api/transcribe?song=${encodeURIComponent(song.dir)}&tracks=${encodeURIComponent(JSON.stringify(ids))}&model=${model}`,
+          { method: "POST", credentials: "same-origin" });
+        if (!r.ok) toast("作成できません: " + (await r.text()), 5000);
+        loadNotes();
+      };
+    });
   });
 }
 function optsPop() {

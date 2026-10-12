@@ -48,6 +48,7 @@ from pipeline import audio
 from . import analysis
 from .jobs import Jobs
 from . import transcribe
+from . import yourmt3
 
 ROOT = Path(__file__).resolve().parent.parent
 STATIC = Path(__file__).resolve().parent / "static"
@@ -626,6 +627,11 @@ class Handler(BaseHTTPRequestHandler):
             if url.path == "/api/notes":
                 return self.send(HTTPStatus.OK, json.dumps(self.lib.notes(q.get("song", ""))),
                                  "application/json", [("Cache-Control", "no-store")])
+            if url.path == "/api/models":
+                # which high-accuracy models are installed (setup.sh --full); the picker grays out the rest
+                body = json.dumps({"ms": transcribe.muscriptor_available(), "mt3": yourmt3.available()})
+                return self.send(HTTPStatus.OK, body, "application/json; charset=utf-8",
+                                 [("Cache-Control", "no-store")])
             if url.path == "/api/song":
                 body = json.dumps(self.lib.details(q.get("song", "")), ensure_ascii=False)
                 return self.send(HTTPStatus.OK, body, "application/json; charset=utf-8", [("Cache-Control", "no-cache")])
