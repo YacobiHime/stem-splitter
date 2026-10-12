@@ -48,8 +48,8 @@ def write_flac(path, audio, sample_rate):
     os.replace(tmp, path)
 
 
-def write_m4a(path, audio, sample_rate, codec="aac", bitrate="256k", metadata=None):
-    """Atomically encode (frames, channels) float32 to .m4a (AAC or ALAC) via ffmpeg."""
+def write_m4a(path, audio, sample_rate, codec="aac", bitrate="256k", metadata=None, cover_source=None):
+    """Atomically encode float32 to .m4a, copying attached artwork from cover_source when present."""
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_name(path.stem + ".tmp.m4a")
@@ -57,8 +57,11 @@ def write_m4a(path, audio, sample_rate, codec="aac", bitrate="256k", metadata=No
     cmd = [
         "ffmpeg", "-nostdin", "-hide_banner", "-loglevel", "error", "-y",
         "-f", "f32le", "-ar", str(sample_rate), "-ac", str(a.shape[1]), "-i", "pipe:0",
-        "-c:a", codec,
     ]
+    if cover_source is not None:
+        cmd += ["-i", os.fspath(cover_source), "-map", "0:a:0", "-map", "1:v:0?",
+                "-c:v", "copy", "-disposition:v:0", "attached_pic"]
+    cmd += ["-c:a", codec]
     if codec == "aac":
         cmd += ["-b:a", bitrate]
     elif codec == "alac":

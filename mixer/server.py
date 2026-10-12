@@ -478,7 +478,8 @@ class Library:
         with tempfile.TemporaryDirectory(prefix="mixer-export-") as tmp:
             out = Path(tmp) / "mix.m4a"
             audio.write_m4a(out, mix, sr, codec="aac", bitrate="256k",
-                            metadata={"title": Path(name).stem, "album": m["song"]})
+                            metadata={"title": Path(name).stem, "album": m["song"]},
+                            cover_source=m.get("input") if Path(m.get("input", "")).is_file() else None)
             data = out.read_bytes()
         return data, name, f"export {name}: {', '.join(used) or 'silence'}{norm}"
 

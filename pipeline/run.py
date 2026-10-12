@@ -585,7 +585,7 @@ def build_deliverables(song, cfg, models, steps):
             audio.write_flac(dst, a, sr)
         elif codec != "wav":
             audio.write_m4a(dst, a, sr, codec=codec, bitrate=fmt.get("bitrate", "256k"),
-                            metadata={"title": title, "album": song.name})
+                            metadata={"title": title, "album": song.name}, cover_source=song.src)
         elif gain == 1.0 and link_src is not None:
             # identical content: hardlink (no extra disk) — survives `--clean` of work/
             tmp = dst.with_name(dst.stem + ".tmp.wav")
