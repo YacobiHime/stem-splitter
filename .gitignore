@@ -27,3 +27,4 @@ __pycache__/
 .mixer_cache/
 mixer.log
 .mixer_jobs.json
+.mixer_playlists.json
