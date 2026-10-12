@@ -458,8 +458,8 @@ input[type=range]::-moz-range-thumb { width: 18px; height: 18px; border-radius: 
 const CHUNK_S = 8;            // PCM is fetched in chunks of this many seconds
 const LOOKAHEAD_S = 2.5;      // audio is scheduled this far ahead of the playhead
 const MIN_DB = -40;           // fader at the bottom = off
-const MAX_DB = 6;
-// faders are shown as a percentage of unity gain (100% = 0 dB, 200% = +6 dB); the stored state stays in dB
+const MAX_DB = 20 * Math.log10(1.2);   // the fader's top: 120 % of unity gain
+// faders are shown as a percentage of unity gain (100% = 0 dB); the stored state stays in dB
 const dbToPct = (db) => Math.round(100 * 10 ** (db / 20));
 const pctToDb = (p) => p <= 0 ? MIN_DB : Math.min(MAX_DB, Math.max(MIN_DB + 0.5, 20 * Math.log10(p / 100)));
 const fpct = (p) => p <= 0 ? "off" : `${p}%`;
@@ -1083,14 +1083,14 @@ const ro = new ResizeObserver((es) => {
 function trackRow(t, colorIdx) {
   const el = document.createElement("div"); el.className = "trk";
   el.innerHTML = `<button class="icon" title="${esc(t.label)}（タップでミュート）" aria-label="${esc(t.label)} のミュート">${svg(partIcon(t.part))}<span class="badge">S</span></button>
-    <div class="vol"><input type="range" min="0" max="200" step="1" aria-label="${esc(t.label)} の音量"><span class="val"></span></div>
+    <div class="vol"><input type="range" min="0" max="120" step="1" aria-label="${esc(t.label)} の音量"><span class="val"></span></div>
     <canvas class="wave" aria-label="${esc(t.label)} の波形（タップで移動・横ドラッグで区間選択）"></canvas>
     <button class="menu" title="${esc(t.label)} の設定" aria-label="${esc(t.label)} の設定">${svg(UI_ICON.more)}</button>`;
   const fader = el.querySelector("input"), val = el.querySelector(".val"), vol = el.querySelector(".vol");
   t.draw = () => {
-    const p = t.db <= MIN_DB ? 0 : dbToPct(t.db);
+    const p = t.db <= MIN_DB ? 0 : Math.min(120, dbToPct(t.db));
     fader.value = p;
-    fader.style.setProperty("--fill", `${(p / 200) * 100}%`);
+    fader.style.setProperty("--fill", `${(p / 120) * 100}%`);
     val.textContent = fpct(p);
   };
   let hideTimer = 0;
@@ -1161,7 +1161,7 @@ const fpan = (v) => (Math.abs(v) < 0.01 ? "C" : v < 0 ? `L${Math.round(-v * 100)
 
 function trackMenu(t, anchor) {
   openPop(anchor, `<h3>${esc(t.label)} <span style="color:var(--muted);font-weight:400">${esc(t.part)}</span></h3>
-    ${rangeRow("音量", "mVol", 0, 200, 1, dbToPct(t.db), fpct)}
+    ${rangeRow("音量", "mVol", 0, 120, 1, Math.min(120, dbToPct(t.db)), fpct)}
     ${rangeRow("パン", "mPan", -1, 1, 0.05, t.pan, fpan)}
     <div class="btns" style="margin-top:12px">
       <button class="btn ${t.mute ? "on" : ""}" id="mMute">ミュート</button>
@@ -1434,6 +1434,7 @@ async function openSong(dir) {
     const d = { db: 0, mute: false, solo: false, pan: 0, shown: x.group === "mix" };
     return { ...x, ...d, ...(lv[x.id] || {}), label: partName(x.part), cache: new Map(), gain: null, panner: null };
   });
+  for (const t of tracks) t.db = Math.min(MAX_DB, Math.max(MIN_DB, t.db));   // old saves may exceed the 120 % top
   if (ctx) for (const t of tracks) attachNodes(t);
   const lp = st.loop || {};
   loopA = lp.a ?? null; loopB = lp.b ?? null; loopOn = !!lp.on;
