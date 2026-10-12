@@ -50,6 +50,7 @@ from .jobs import Jobs
 from .playlists import Playlists
 from . import transcribe
 from . import yourmt3
+from .tailscale_auth import TailscaleAuth
 
 ROOT = Path(__file__).resolve().parent.parent
 STATIC = Path(__file__).resolve().parent / "static"
@@ -509,6 +510,7 @@ class Handler(BaseHTTPRequestHandler):
     jobs: Jobs
     playlists: Playlists
     token: str
+    tailscale_auth = None
 
     def do_PUT(self):
         url = urlsplit(self.path)
@@ -595,12 +597,29 @@ class Handler(BaseHTTPRequestHandler):
         if not self.path.startswith("/api/pcm"):
             super().log_message(fmt, *args)
 
+    def log_request(self, code="-", size="-"):
+        # Authentication URLs contain a secret; never log query strings.
+        self.log_message('"%s %s %s" %s %s', self.command,
+                         urlsplit(self.path).path, self.request_version, str(code), str(size))
+
     def authed(self):
+        if self.command in ("POST", "PUT"):
+            # Tailscale authentication does not rely on SameSite cookies.
+            # Block actions initiated by an unrelated browser page.
+            if self.headers.get("Sec-Fetch-Site") == "cross-site":
+                return False
+            origin = self.headers.get("Origin")
+            if origin:
+                parsed = urlsplit(origin)
+                if (parsed.scheme not in ("http", "https")
+                        or parsed.netloc.lower() != self.headers.get("Host", "").lower()):
+                    return False
         for part in self.headers.get("Cookie", "").split(";"):
             k, _, v = part.strip().partition("=")
             if k == COOKIE and hmac.compare_digest(v, self.token):
                 return True
-        return False
+        return bool(self.tailscale_auth and self.tailscale_auth.allows(
+            self.connection, self.client_address, self.headers.get("Host", "")))
 
     def send(self, code, body, ctype="text/plain; charset=utf-8", headers=()):
         if isinstance(body, str):
@@ -707,8 +726,11 @@ def main(argv=None):
     ap.add_argument("--host", default="0.0.0.0", help="listen address (default: all interfaces, i.e. reachable from the LAN)")
     ap.add_argument("--port", type=int, default=8000)
     ap.add_argument("--output", default=os.fspath(ROOT / "output"))
+    ap.add_argument("--tailscale-auth", action="store_true",
+                    help="allow direct Tailscale connections from the server owner's devices")
     args = ap.parse_args(argv)
 
+    Handler.tailscale_auth = TailscaleAuth() if args.tailscale_auth else None
     Handler.lib = Library(args.output)
     Handler.jobs = Jobs(Handler.lib)
     Handler.playlists = Playlists()
@@ -717,8 +739,14 @@ def main(argv=None):
     host = lan_ip() if args.host in ("0.0.0.0", "") else args.host
     print(f"stem mixer: {len(Handler.lib.songs())} songs in {Handler.lib.out_root}", flush=True)
     threading.Thread(target=Handler.lib.prewarm, daemon=True).start()
-    print("スマホ・タブレット・PC のブラウザで、最初に一度だけ次の URL を開いてください（以後は ?k= なしでよい）:", flush=True)
-    print(f"  http://{host}:{args.port}/?k={quote(Handler.token)}", flush=True)
+    if Handler.tailscale_auth:
+        print("同じアカウントで Tailscale に接続した端末から開いてください:", flush=True)
+        for address in sorted(Handler.tailscale_auth.addresses):
+            if ":" not in address:
+                print(f"  http://{address}:{args.port}/", flush=True)
+    else:
+        print("スマホ・タブレット・PC のブラウザで、最初に一度だけ次の URL を開いてください（以後は ?k= なしでよい）:", flush=True)
+        print(f"  http://{host}:{args.port}/?k={quote(Handler.token)}", flush=True)
     print("停止: Ctrl+C", flush=True)
     try:
         httpd.serve_forever()
