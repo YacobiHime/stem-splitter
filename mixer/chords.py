@@ -4,6 +4,12 @@ Model code and pretrained weights: vendor/BTC-ISMIR19 (MIT license,
 https://github.com/jayg996/BTC-ISMIR19). The large-vocabulary model knows 170 labels:
 12 roots x {maj, min, dim, aug, min6, maj6, min7, minmaj7, maj7, 7, dim7, hdim7, sus2, sus4} + N + X.
 
+When models/chords/btc_model_best.pth is present it is preferred: the distilled BTC student of
+ChordMini (Phan et al., arXiv:2602.19778, MIT-licensed repo) — same architecture, same CQT
+features and label space, trained on the original weights' pseudo-labels plus 1000 h of audio;
+it beats the original weights on every mir_eval metric. Delete the file (or download fails)
+and the original weights are used again, so vendor/BTC-ISMIR19 stays the hard requirement.
+
 frame_log_probs() gives (frames, 170) log-probabilities at ~10.8 frames/s; analysis.py
 averages them over each beat and smooths the beat sequence.
 """
@@ -14,6 +20,7 @@ from pathlib import Path
 import numpy as np
 
 BTC_DIR = Path(__file__).resolve().parent.parent / "vendor" / "BTC-ISMIR19"
+DISTILLED = Path(__file__).resolve().parent.parent / "models" / "chords" / "btc_model_best.pth"
 SR = 22050
 N_BINS, BINS_PER_OCTAVE, HOP = 144, 24, 2048
 INST_LEN = 10.0                  # the model computes the CQT in 10 s pieces of 108 frames
@@ -54,13 +61,28 @@ def _load():
                   attention_dropout=0.2, relu_dropout=0.2, num_layers=8, num_heads=4, hidden_size=128,
                   total_key_depth=128, total_value_depth=128, filter_size=128, loss="ce", probs_out=False)
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    # the checkpoint stores numpy mean/std next to the weights, so it needs the full unpickler (local, trusted file)
-    ckpt = torch.load(BTC_DIR / "test" / "btc_model_large_voca.pt", map_location=device, weights_only=False)
+    # both checkpoints store numpy mean/std next to the weights, so they need the full unpickler
+    # (local files, sha256 recorded in models/MODELS.md)
+    if DISTILLED.exists():
+        ckpt = torch.load(DISTILLED, map_location=device, weights_only=False)   # full training checkpoint
+        state = ckpt["model_state_dict"]
+        norm = ckpt.get("normalization") or {}
+        mean = float(ckpt.get("mean", norm.get("mean", 0.0)))          # z-score stats of the teacher,
+        std = max(float(ckpt.get("std", norm.get("std", 1.0))), 1e-8)  # as the student was trained on
+        name = "btc-distilled"
+    else:
+        ckpt = torch.load(BTC_DIR / "test" / "btc_model_large_voca.pt", map_location=device, weights_only=False)
+        state, mean, std, name = ckpt["model"], float(ckpt["mean"]), float(ckpt["std"]), "btc-large-voca"
     model = BTC_model(config=cfg).to(device)
-    model.load_state_dict(ckpt["model"])
+    model.load_state_dict(state)
     model.eval()
-    _model = (model, float(ckpt["mean"]), float(ckpt["std"]), device)
+    _model = (model, mean, std, device, name)
     return _model
+
+
+def model_name():
+    """Which weights frame_log_probs() runs on ('btc-distilled' / 'btc-large-voca'); loads them."""
+    return _load()[4]
 
 
 def features(y):
@@ -78,7 +100,7 @@ def frame_log_probs(y):
     import torch
     import torch.nn.functional as F
 
-    model, mean, std, device = _load()
+    model, mean, std, device, _name = _load()
     x = (features(y) - mean) / std
     n = x.shape[0]
     pad = (-n) % TIMESTEP

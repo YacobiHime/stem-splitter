@@ -11,7 +11,9 @@ Everything is computed from the separated tracks in output/<song>/mix/:
           next chord, as chord charts write it) and the beat sequence is smoothed with Viterbi,
           where chords change most easily on bar lines, then on the bar's inner strong beats
           (beat 3 of 4/4, the 2nd group of 6/8, 3+2 of 5/4, ...), rarely elsewhere.
-          Without vendor/BTC-ISMIR19: chroma matched to 24 major/minor triads (the old method).
+          The ChordMini distilled BTC student (arXiv:2602.19778) is used when its checkpoint is
+          in models/chords/; otherwise the original vendor/BTC-ISMIR19 weights. Without either:
+          chroma matched to 24 major/minor triads (the old method).
   key     Krumhansl-Schmuckler profiles on the whole-song chroma
 The page lets the user correct the beat interpretation (x2, /2, 3/4, shift the bar lines).
 """
@@ -22,7 +24,7 @@ import soundfile as sf
 from . import chords as btc
 from . import meter
 
-VERSION = 5
+VERSION = 6
 SR = 22050
 HOP = 512          # chroma frames (23 ms)
 BEAT_HOP = 128     # beat tracking frames (5.8 ms), so the BPM is not quantized to 23 ms steps
@@ -132,7 +134,7 @@ def analyze(tracks):
         return int(np.argmax([evidence[p::4].mean() for p in range(4)]))
 
     if btc.available():
-        model = "btc-large-voca"
+        model = btc.model_name()
         lp = 0.5 * (btc.frame_log_probs(sum(y.values())) +
                     btc.frame_log_probs(harm_mix))
         E = beat_emissions(lp, beat_times)

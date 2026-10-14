@@ -57,6 +57,7 @@
 | 役割 | 入手方法 | オリジナル出典 | ライセンス表記 | sha256 |
 |---|---|---|---|---|
 | コード認識（170種） | `git clone https://github.com/jayg996/BTC-ISMIR19 vendor/BTC-ISMIR19`（commit `2682317`）。重みはリポジトリ同梱の `test/btc_model_large_voca.pt` | https://github.com/jayg996/BTC-ISMIR19 （Park et al., ISMIR 2019） | MIT | `1673d23f8f9a55ae7f9e8b80a51da616debb22675b8d8b67ea6ce0ef37b0ab51` |
+| コード認識（170種、蒸留改良版・優先） | `curl -L -o models/chords/btc_model_best.pth https://raw.githubusercontent.com/ptnghia-j/ChordMini/main/checkpoints/btc_model_best.pth`（commit `aa6e3a8`、2026-10-14取得）。削除すると上のオリジナル重みに自動で戻る | https://github.com/ptnghia-j/ChordMini （Phan et al., arXiv:2602.19778。上のBTCを教師とした擬似ラベル+知識蒸留の学生モデル。論文の全 mir_eval 指標で教師を上回る、7thや稀なコードで特に） | MIT（リポジトリ全体。重み単体の個別表記はなし。教師は上の jayg996 BTC = MIT） | `e0a12ca6d881f81e01dfb459b4836ec7dac8d8f87b0170a412b5807256b3a1fc` |
 | 拍・小節頭・拍子 | `VIRTUAL_ENV=.venv uv pip install git+https://github.com/CPJKU/beat_this.git`（1.1.0）。重みは初回に `~/.cache/torch/hub/checkpoints/beat_this-final0.ckpt` へ自動ダウンロード | https://github.com/CPJKU/beat_this （Foscarin et al., ISMIR 2024） | MIT（コードと重み） | `8c328b45f59d8dd3dff219253ff6a8d6482be57d0133a29140e2febbf8eb8331` |
 
 ## ミキサーの「分離の設定」（カスタム分離など）で使うもの
