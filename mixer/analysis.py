@@ -12,8 +12,9 @@ Everything is computed from the separated tracks in output/<song>/mix/:
           where chords change most easily on bar lines, then on the bar's inner strong beats
           (beat 3 of 4/4, the 2nd group of 6/8, 3+2 of 5/4, ...), rarely elsewhere.
           The ChordMini distilled BTC student (arXiv:2602.19778) is used when its checkpoint is
-          in models/chords/; otherwise the original vendor/BTC-ISMIR19 weights. Without either:
-          chroma matched to 24 major/minor triads (the old method).
+          in models/chords/; otherwise the original vendor/BTC-ISMIR19 weights. "N" (no chord)
+          only passes where the harmony signal is near-silent (35 dB under its 95th percentile);
+          without either model: chroma matched to 24 major/minor triads (the old method).
   key     Krumhansl-Schmuckler profiles on the whole-song chroma
 The page lets the user correct the beat interpretation (x2, /2, 3/4, shift the bar lines).
 """
@@ -24,7 +25,7 @@ import soundfile as sf
 from . import chords as btc
 from . import meter
 
-VERSION = 6
+VERSION = 7
 SR = 22050
 HOP = 512          # chroma frames (23 ms)
 BEAT_HOP = 128     # beat tracking frames (5.8 ms), so the BPM is not quantized to 23 ms steps
@@ -137,7 +138,7 @@ def analyze(tracks):
         model = btc.model_name()
         lp = 0.5 * (btc.frame_log_probs(sum(y.values())) +
                     btc.frame_log_probs(harm_mix))
-        E = beat_emissions(lp, beat_times)
+        E = beat_emissions(lp, beat_times, rms)
         if barpos is None:
             # the bar phase is the one under which the chord sequence fits the bar-line prior best
             best = None
@@ -246,10 +247,13 @@ def tonic_count(names, root, minor):
     return sum(1 for n in names if ":" in n and int(n.split(":")[0]) == root and n.split(":")[1] in want)
 
 
-def beat_emissions(lp, beat_times):
+def beat_emissions(lp, beat_times, rms):
     """(beats, labels) evidence per beat: summed frame log-probs over the beat minus its last 8th
     (up to 0.2 s), so a chord pushed ahead of the bar line is credited to the bar it belongs to.
-    Summing (not averaging) lets long beats outweigh the change prior, so slow songs keep fast changes."""
+    Summing (not averaging) lets long beats outweigh the change prior, so slow songs keep fast changes.
+    rms: per-beat RMS of the harmony signal (harm + 0.5 * bass). "N" is only let through where that
+    signal is effectively silent (the same 35 dB rule the chroma fallback uses) — the distilled model
+    over-predicts N on thin keyboard / arpeggio textures that clearly carry a chord."""
     fr = np.arange(len(lp)) * btc.FRAME_S + btc.FRAME_S / 2
     ibi = np.diff(np.r_[beat_times, beat_times[-1] + np.median(np.diff(beat_times))])
     E = np.zeros((len(beat_times), lp.shape[1]))
@@ -259,6 +263,7 @@ def beat_emissions(lp, beat_times):
             m = np.abs(fr - b) == np.abs(fr - b).min()
         E[i] = lp[m].sum(axis=0)
     E[:, 168] = -np.inf          # "X" (unknown chord) is not useful on a chord chart
+    E[~(rms < np.percentile(rms, 95) * 10 ** (-35 / 20)), 169] = -np.inf
     return E
 
 
